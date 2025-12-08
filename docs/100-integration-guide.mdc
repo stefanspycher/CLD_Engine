@@ -6,13 +6,17 @@ description: STEP-BY-STEP INTEGRATION GUIDE FOR BAKLAVAJS - HOW TO INTEGRATE CLD
 
 ## 1. Overview
 
-This guide provides step-by-step instructions for integrating CLD-Engine into a BaklavaJS playground. The integration requires creating an adapter layer that:
+This guide provides step-by-step instructions for integrating CLD-Engine into a BaklavaJS playground. The integration requires:
 
-1. Converts BaklavaJS graphs to CLD-Engine graphs
-2. Executes CLD-Engine with appropriate strategies
-3. Writes execution results back to BaklavaJS nodes
+0. **PREREQUISITE**: Enable cycle support in baklavajs (CLDs require feedback loops)
+1. Creating an adapter layer that:
+   - Converts BaklavaJS graphs to CLD-Engine graphs
+   - Executes CLD-Engine with appropriate strategies
+   - Writes execution results back to BaklavaJS nodes
 
 **Important**: CLD-Engine is a headless library with no BaklavaJS dependencies. All integration code lives in the BaklavaJS workspace.
+
+**Critical**: Without cycle enablement (Step 0), users cannot create CLD graphs in the UI. Complete Step 0 before proceeding.
 
 ---
 
@@ -48,7 +52,93 @@ baklavajs-workspace/
 
 ---
 
-## 3. Step 1: Install CLD-Engine
+## 3. Step 0: Enable Cycles in BaklavaJS (PREREQUISITE)
+
+### 3.0 Critical Blocker
+
+**Problem**: BaklavaJS prevents cycle creation by design (built for DAG workflows). CLDs require cycles.
+
+**Impact**: Without cycle enablement, users cannot create feedback loops in the UI, making CLD modeling impossible.
+
+**Solution**: Implement CLDDependencyEngine before any adapter work.
+
+### 3.1 Specification Reference
+
+**See**: `docs/110-baklava-cycle-enablement.mdc` for complete technical specification.
+
+This document contains:
+- Detailed architectural reasoning
+- CLDDependencyEngine class specification
+- Implementation requirements for cursor.ai
+- Testing requirements
+- Success criteria
+
+### 3.2 Quick Summary
+
+**What to create**: `packages/renderer-vue/playground/CLDDependencyEngine.ts`
+
+**What it does**: 
+- Extends `DependencyEngine` from `@baklavajs/engine`
+- Overrides `checkConnection()` method
+- Removes cycle detection logic
+- Allows feedback loop creation
+
+**Key override**:
+```typescript
+// Pseudo-code - see doc 110 for full specification
+public override checkConnection(from, to) {
+  // Basic validation only (prevent self-connections)
+  // NO cycle detection
+  // Allow all connections between different nodes
+}
+```
+
+### 3.3 Integration
+
+After creating CLDDependencyEngine, use it in your playground:
+
+```typescript
+// In main.ts or App.vue setup
+import { CLDDependencyEngine } from './CLDDependencyEngine';
+
+const editor = new Editor();
+const engine = new CLDDependencyEngine(editor); // Use cycle-enabled engine
+editor.use(engine);
+```
+
+### 3.4 Verification
+
+Before proceeding to Step 1, verify:
+
+1. CLDDependencyEngine.ts exists in playground directory
+2. Playground instantiates CLDDependencyEngine (not DependencyEngine)
+3. Can create triangle loop in UI: A → B → C → A
+4. No "cycle detected" errors in console
+5. All three connections succeed
+
+**If verification fails**: Stop and complete doc 110 specification before proceeding.
+
+### 3.5 Why This Must Come First
+
+```
+Without cycle enablement:
+  User creates nodes → Tries to create cycle → Connection blocked → Incomplete graph
+  ❌ Cannot model CLDs
+  ❌ Adapter receives incomplete structure
+  ❌ CLD-Engine cannot execute properly
+
+With cycle enablement:
+  User creates nodes → Creates cycles freely → Complete graph
+  ✓ Can model CLDs properly
+  ✓ Adapter extracts full topology
+  ✓ CLD-Engine executes correctly
+```
+
+**Do not skip this step.** All subsequent steps assume cycles are enabled.
+
+---
+
+## 4. Step 1: Install CLD-Engine
 
 ### 3.1 Option A: Local Path (Development)
 
@@ -82,7 +172,7 @@ console.log("CLD-Engine imported successfully");
 
 ---
 
-## 4. Step 2: Create Adapter Structure
+## 5. Step 2: Create Adapter Structure
 
 Create the adapter directory structure:
 
@@ -98,7 +188,7 @@ Create these files:
 
 ---
 
-## 5. Step 3: Map Baklava Graph to CLD-Engine Graph
+## 6. Step 3: Map Baklava Graph to CLD-Engine Graph
 
 Create `adapter/graphMapper.ts`:
 
@@ -162,7 +252,7 @@ function convertConnectionToEdge(connection: Connection): Edge | null {
 
 ---
 
-## 6. Step 4: Map Baklava Nodes to CLD-Engine NodeDefinitions
+## 7. Step 4: Map Baklava Nodes to CLD-Engine NodeDefinitions
 
 Create `adapter/nodeMapper.ts`:
 
@@ -260,7 +350,7 @@ function mapCLDVariableNode(
 
 ---
 
-## 7. Step 5: Create Initial State Map
+## 8. Step 5: Create Initial State Map
 
 Create a function to extract initial state from Baklava nodes:
 
@@ -295,7 +385,7 @@ export function extractInitialState(
 
 ---
 
-## 8. Step 6: Execute CLD-Engine
+## 9. Step 6: Execute CLD-Engine
 
 Create `adapter/index.ts`:
 
@@ -366,7 +456,7 @@ export async function executeCLDEngine(
 
 ---
 
-## 9. Step 7: Apply Results Back to Baklava Nodes
+## 10. Step 7: Apply Results Back to Baklava Nodes
 
 Create `adapter/resultMapper.ts`:
 
@@ -419,7 +509,7 @@ export function applyExecutionResult(
 
 ---
 
-## 10. Step 8: Wire Up UI Triggers
+## 11. Step 8: Wire Up UI Triggers
 
 Update `App.vue` to use the adapter:
 
@@ -475,7 +565,7 @@ Add a button in the template:
 
 ---
 
-## 11. Step 9: Handle Port Mapping
+## 12. Step 9: Handle Port Mapping
 
 Ensure port IDs match between Baklava interfaces and CLD-Engine ports:
 
@@ -514,7 +604,7 @@ outputs: {
 
 ---
 
-## 12. Step 10: Testing the Integration
+## 13. Step 10: Testing the Integration
 
 ### 12.1 Basic Test
 
@@ -540,7 +630,7 @@ outputs: {
 
 ---
 
-## 13. Common Issues and Solutions
+## 14. Common Issues and Solutions
 
 ### 13.1 Port ID Mismatches
 
@@ -582,7 +672,7 @@ outputs: {
 
 ---
 
-## 14. Advanced Integration Patterns
+## 15. Advanced Integration Patterns
 
 ### 14.1 Custom Node Types
 
@@ -668,7 +758,7 @@ const executeCLD = async () => {
 
 ---
 
-## 15. Performance Considerations
+## 16. Performance Considerations
 
 ### 15.1 Graph Conversion Caching
 
@@ -711,7 +801,7 @@ export function applyExecutionResult(
 
 ---
 
-## 16. Complete Example
+## 17. Complete Example
 
 Here's a complete minimal adapter implementation:
 
@@ -740,7 +830,7 @@ export async function executeCLDEngine(
 
 ---
 
-## 17. Next Steps
+## 18. Next Steps
 
 - Test with various graph topologies
 - Add support for additional node types
@@ -751,7 +841,9 @@ export async function executeCLDEngine(
 
 ---
 
-## 18. Reference
+## 19. Reference
+
+- **PREREQUISITE**: Cycle Enablement: `docs/110-baklava-cycle-enablement.mdc`
 
 - CLD-Engine User Manual: `docs/090-user-manual.mdc`
 - CLD-Engine API Design: `docs/030-api-design.mdc`

@@ -4,19 +4,51 @@ description: BAKLAVA ADAPTER/INTEGRATION DESIGN FOR CLD-ENGINE
 
 # 060 – Integration: Baklava Adapter
 
+## 0. Prerequisites (CRITICAL)
+
+**Before implementing any adapter code**, the following must be completed:
+
+### 0.1 Cycle Enablement (MANDATORY)
+
+BaklavaJS by default prevents cycle creation (designed for DAG workflows). CLDs require cycles (feedback loops are fundamental).
+
+**Required action**: Enable cycle support in baklavajs before adapter work.
+
+**See**: `docs/110-baklava-cycle-enablement.mdc` for complete specification.
+
+**Why this matters**: 
+- Without cycle enablement, users cannot create CLD graphs in the UI
+- Adapter will receive incomplete graph structures (missing feedback loops)
+- CLD-Engine cannot execute properly without full cycle topology
+
+**Verification**: 
+- User can create triangle loop (A → B → C → A) in baklava UI
+- No "cycle detected" errors appear
+- CLDDependencyEngine is instantiated instead of DependencyEngine
+
+**Status check**: If you cannot create cycles in baklava UI, stop and complete doc 110 first.
+
+---
+
 ## 1. Purpose
 
 This document defines how a BaklavaJS-based playground should integrate with CLD-Engine via an **adapter layer**. The adapter lives in the Baklava repository, not in CLD-Engine.
+
+**Assumes**: Cycle enablement is complete (see section 0).
+
+---
 
 ## 2. High-Level Flow
 
 For a Baklava editor + graph:
 
-1. Extract a CLD-Engine `Graph` from Baklava’s `Editor.graph`.
+1. Extract a CLD-Engine `Graph` from Baklava's `Editor.graph`.
 2. Run CLD-Engine with the desired strategy.
 3. Map resulting node states/outputs back into Baklava nodes (e.g., CLDVariableNode).
 
-CLD-Engine remains ignorant of Baklava’s internal types.
+CLD-Engine remains ignorant of Baklava's internal types.
+
+---
 
 ## 3. Mapping: Baklava → CLD-Engine Graph
 
@@ -45,6 +77,10 @@ For each Baklava `Connection`:
 
 Edges are added to the CLD-Engine `Graph` as `Edge` objects.
 
+**Note**: With cycle enablement complete, edges can form cycles. The adapter must extract ALL edges including back-edges.
+
+---
+
 ## 4. Node Behavior Mapping
 
 The adapter must provide CLD-Engine **NodeDefinition** instances whose `calculate` behavior matches the semantics of the Baklava nodes in a CLD context.
@@ -63,13 +99,15 @@ Example for CLDVariableNode:
 After execution:
 - The adapter writes back `state.currentValue` into the Baklava node instance (or its interfaces) as needed to update the UI.
 
+---
+
 ## 5. Execution Triggering
 
 In the Baklava playground:
 
 - The adapter should:
   - Subscribe to relevant events (node updates, connections, button presses) or
-  - Provide an explicit “Run CLD Engine” action.
+  - Provide an explicit "Run CLD Engine" action.
 
 Execution flow:
 1. Adapter constructs CLD-Engine `Graph` and initial state from current Baklava graph.
@@ -79,8 +117,24 @@ Execution flow:
    - Node state into corresponding Baklava node instances.
    - Any needed transient values into interfaces if required for UI feedback.
 
+---
+
 ## 6. Versioning Boundary
 
 - CLD-Engine must not import or depend on Baklava packages.
 - Baklava integration code must treat CLD-Engine as an external library with a stable public API.
 
+---
+
+## 7. Integration Checklist
+
+Before beginning adapter implementation, verify:
+
+- [ ] Cycle enablement complete (doc 110)
+- [ ] Can create cycles in baklava UI
+- [ ] CLDDependencyEngine instantiated
+- [ ] CLD-Engine package available (built or installed)
+- [ ] CLDVariableNode exists in playground
+- [ ] No "cycle detected" errors in console
+
+**If any item unchecked**: Complete prerequisites before proceeding.

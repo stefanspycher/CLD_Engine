@@ -1,0 +1,395 @@
+---
+description: BAKLAVA CYCLE ENABLEMENT - PREREQUISITE FOR CLD INTEGRATION
+---
+
+# 110 – Baklava Cycle Enablement
+
+## 1. Overview
+
+This document specifies how to enable cycle support in BaklavaJS to allow creation of Causal Loop Diagrams (CLDs). This is a **mandatory prerequisite** before any CLD-Engine integration work can begin.
+
+**Problem**: BaklavaJS was designed for workflow/pipeline systems (Directed Acyclic Graphs). It actively prevents users from creating connections that would form cycles. For CLDs, cycles (feedback loops) are the fundamental feature, not an error.
+
+**Solution**: Create a CLD-specific engine class that allows cycle creation while maintaining compatibility with baklava's existing architecture.
+
+**Location**: This work happens in the **baklavajs repository**, not CLD-Engine.
+
+---
+
+## 2. The Technical Problem
+
+### 2.1 Where Cycle Prevention Occurs
+
+**File**: `packages/engine/src/baseEngine.ts`  
+**Method**: `checkConnection(from: NodeInterface, to: NodeInterface)`  
+**Line**: Approximately line 260
+
+The method contains this logic:
+```typescript
+// Pseudo-code of current behavior
+if (containsCycle(this.editor.graph.nodes, copy)) {
+    return { connectionAllowed: false, connectionsInDanger: [] };
+}
+```
+
+This hook is registered in the BaseEngine constructor and is called whenever a user attempts to create a connection in the UI. If the connection would create a cycle, it is rejected.
+
+### 2.2 Why This Blocks CLDs
+
+When a user tries to create:
+- Node A → Node B → Node C → Node A (triangle feedback loop)
+- The third connection (C → A) is blocked
+- User cannot complete the CLD
+
+**Reference**: See `CLD_PRIMER.md` - Feedback loops are the core of systems thinking.
+
+---
+
+## 3. Solution Architecture
+
+### 3.1 Design Pattern
+
+Use **subclass override pattern**:
+- Create `CLDDependencyEngine` extending `DependencyEngine`
+- Override `checkConnection()` method
+- Remove cycle detection logic
+- Keep all other baklava engine behavior intact
+
+### 3.2 Why This Approach
+
+**Advantages**:
+- Non-invasive (no modification of baklava source)
+- Type-safe (full TypeScript support)
+- Clear intent (class name documents purpose)
+- Maintainable (easy to understand later)
+- Coexists with regular DependencyEngine (if needed)
+
+**Alternatives rejected**:
+- Modifying baklava core: breaks updates from upstream
+- Monkey-patching: fragile, unclear intent
+- Config flag: requires modifying baklava source
+
+---
+
+## 4. CLDDependencyEngine Specification
+
+### 4.1 File Location
+
+**Create new file**: `packages/renderer-vue/playground/CLDDependencyEngine.ts`
+
+**Rationale**: 
+- Playground is where CLD nodes live
+- Not part of baklava core (remains optional)
+- Easy to import in playground setup
+
+### 4.2 Class Structure
+
+**Name**: `CLDDependencyEngine`
+
+**Extends**: `DependencyEngine` from `@baklavajs/engine`
+
+**Purpose**: Dependency engine that permits cycles for CLD graphs
+
+### 4.3 Required Imports
+
+```typescript
+// From baklava packages
+- DependencyEngine (from @baklavajs/engine)
+- Editor (from @baklavajs/core)
+- NodeInterface (from @baklavajs/core)
+- CheckConnectionHookResult (from @baklavajs/core)
+```
+
+### 4.4 Constructor Specification
+
+**Signature**: `constructor(editor: Editor)`
+
+**Behavior**:
+- Call `super(editor)` to initialize parent engine
+- No additional initialization needed
+
+**Purpose**: Standard engine initialization, inherits all DependencyEngine behavior
+
+### 4.5 checkConnection Method Override
+
+**Signature**: 
+```typescript
+public override checkConnection(
+    from: NodeInterface, 
+    to: NodeInterface
+): CheckConnectionHookResult
+```
+
+**Required Behavior**:
+
+1. **Handle template IDs** (same as parent):
+   - If `from.templateId` exists, resolve to actual interface
+   - If `to.templateId` exists, resolve to actual interface
+   - Use private helper method for resolution
+
+2. **Prevent self-connections**:
+   - Check if `from.nodeId === to.nodeId`
+   - If true, return `{ connectionAllowed: false, connectionsInDanger: [] }`
+
+3. **Allow cycles** (KEY DIFFERENCE):
+   - Do NOT call `containsCycle()`
+   - Always return `connectionAllowed: true` (after validation)
+
+4. **Handle multiple connections**:
+   - If `to.allowMultipleConnections` is false:
+     - Return existing connections to same target in `connectionsInDanger`
+   - If true:
+     - Return empty `connectionsInDanger` array
+
+**Return type**: `CheckConnectionHookResult`
+- `connectionAllowed: boolean` - Whether connection can be created
+- `connectionsInDanger: IConnection[]` - Existing connections that would be replaced
+
+### 4.6 Private Helper Method
+
+**Name**: `findInterfaceByTemplateId`
+
+**Signature**:
+```typescript
+private findInterfaceByTemplateId(
+    nodes: ReadonlyArray<AbstractNode>, 
+    templateId: string
+): NodeInterface | null
+```
+
+**Purpose**: Find an interface by its template ID across all nodes
+
+**Behavior**:
+- Iterate through all nodes
+- Check all inputs and outputs
+- Return first interface where `intf.templateId === templateId`
+- Return `null` if not found
+
+**Note**: This duplicates a private method from BaseEngine because TypeScript doesn't allow accessing parent's private methods.
+
+---
+
+## 5. Integration Points
+
+### 5.1 Usage in Playground
+
+**File to modify**: `packages/renderer-vue/playground/main.ts` (or `App.vue` setup)
+
+**Current code** (approximate):
+```typescript
+const editor = new Editor();
+const engine = new DependencyEngine(editor);
+editor.use(engine);
+```
+
+**Updated code**:
+```typescript
+import { CLDDependencyEngine } from './CLDDependencyEngine';
+
+const editor = new Editor();
+const engine = new CLDDependencyEngine(editor); // Use cycle-enabled engine
+editor.use(engine);
+```
+
+### 5.2 Compatibility
+
+**With existing nodes**: Full compatibility
+- All existing node types work unchanged
+- Node interface system unchanged
+- Connection events unchanged
+
+**With existing engine API**: Full compatibility
+- All DependencyEngine public methods available
+- Events and hooks inherited
+- Execution behavior unchanged (except cycle handling)
+
+**Breaking changes**: None
+- Optional upgrade (can still use DependencyEngine if needed)
+- No changes to baklava core
+- No changes to node definitions
+
+---
+
+## 6. Testing Requirements
+
+### 6.1 Manual Testing
+
+After implementation, test these scenarios:
+
+**Test 1: Simple cycle creation**
+1. Create 3 CLD Variable nodes: A, B, C
+2. Connect A → B
+3. Connect B → C
+4. Connect C → A (forms cycle)
+5. **Expected**: Connection succeeds, no error
+
+**Test 2: Self-connection prevention**
+1. Create 1 CLD Variable node: A
+2. Attempt to connect A output → A input
+3. **Expected**: Connection rejected (self-connections not allowed)
+
+**Test 3: Multiple cycles**
+1. Create nodes A, B, C, D, E
+2. Create cycle: A → B → C → A
+3. Create cycle: D → E → D
+4. Connect C → D (linking the cycles)
+5. **Expected**: All connections succeed
+
+**Test 4: Complex topology**
+1. Create 6-8 nodes
+2. Create multiple overlapping cycles
+3. Verify all connections can be created
+4. **Expected**: No connection is blocked
+
+### 6.2 Validation Criteria
+
+**Success indicators**:
+- User can create triangle loops (A → B → C → A)
+- User can create figure-8 patterns (overlapping cycles)
+- User can create any arbitrary cycle structure
+- Self-connections are still prevented
+- No console errors during connection creation
+
+**Failure indicators**:
+- "Cycle detected" errors appear
+- Connections are rejected unexpectedly
+- Console shows errors from engine
+- UI freezes or becomes unresponsive
+
+---
+
+## 7. Implementation Notes
+
+### 7.1 TypeScript Considerations
+
+**Type safety**:
+- All types must match parent class signatures exactly
+- Use `override` keyword for clarity
+- Import all required types from `@baklavajs/core`
+
+**Access modifiers**:
+- `public` for overridden methods
+- `private` for helper methods
+- Match parent class visibility
+
+### 7.2 Code Organization
+
+**File structure**:
+```
+CLDDependencyEngine.ts
+├── Imports
+├── Class declaration
+│   ├── Constructor
+│   ├── checkConnection (override)
+│   └── findInterfaceByTemplateId (private helper)
+└── Export
+```
+
+**Documentation**:
+- Add JSDoc comments explaining cycle allowance
+- Reference this document (110) in class comment
+- Note that this breaks baklava's default DAG assumption
+
+### 7.3 Error Handling
+
+**What to handle**:
+- Template ID resolution failures (return null, allow parent to handle)
+- Null/undefined interfaces (validate at entry)
+
+**What NOT to handle**:
+- Cycle detection (intentionally omitted)
+- Connection execution (parent handles)
+
+---
+
+## 8. Relationship to CLD-Engine Integration
+
+### 8.1 Dependency Chain
+
+```
+Phase 4: BaklavaJS Integration
+├── Step 0: Enable Cycles (THIS DOCUMENT)
+│   └── Creates CLDDependencyEngine
+├── Step 1: Install CLD-Engine package
+├── Step 2: Create adapter layer
+├── Step 3: Map Baklava → CLD-Engine
+└── Step 4: Execute and apply results
+```
+
+### 8.2 Why This Must Come First
+
+**Without cycle enablement**:
+- User cannot create feedback loops in UI
+- Graph structure is incomplete
+- Adapter would fail (missing connections)
+- CLD-Engine cannot detect cycles
+
+**With cycle enablement**:
+- User can model complete CLD structures
+- All feedback loops captured
+- Adapter can extract full graph topology
+- CLD-Engine can detect and handle cycles correctly
+
+---
+
+## 9. Verification Checklist
+
+Before proceeding to adapter implementation, verify:
+
+- [ ] CLDDependencyEngine.ts file exists in playground directory
+- [ ] Class extends DependencyEngine correctly
+- [ ] Constructor calls super(editor)
+- [ ] checkConnection method overridden
+- [ ] Self-connection prevention works
+- [ ] Cycle creation succeeds (manual test)
+- [ ] No TypeScript compilation errors
+- [ ] Playground uses CLDDependencyEngine instead of DependencyEngine
+- [ ] No breaking changes to existing functionality
+- [ ] Console shows no errors during connection creation
+
+---
+
+## 10. Common Issues and Solutions
+
+### Issue 1: "Cannot find module @baklavajs/engine"
+
+**Cause**: Incorrect import path  
+**Solution**: Verify baklava packages are installed in playground, use relative or package imports correctly
+
+### Issue 2: TypeScript error "Property 'checkConnection' is private"
+
+**Cause**: Trying to access parent's private method  
+**Solution**: Duplicate the private helper method in CLDDependencyEngine
+
+### Issue 3: Connections still blocked
+
+**Cause**: Still using DependencyEngine instead of CLDDependencyEngine  
+**Solution**: Verify playground instantiates CLDDependencyEngine
+
+### Issue 4: Engine stops working after change
+
+**Cause**: Constructor not calling super() correctly  
+**Solution**: Ensure `super(editor)` is first line in constructor
+
+---
+
+## 11. Success Criteria
+
+This prerequisite is complete when:
+
+1. **Code exists**: CLDDependencyEngine.ts in playground directory
+2. **Tests pass**: All manual tests succeed (section 6.1)
+3. **Integration works**: Playground uses new engine without errors
+4. **Cycles allowed**: User can create feedback loops in UI
+5. **Compatibility maintained**: Existing functionality unchanged
+
+**Ready for next phase**: When all above criteria met, proceed to adapter implementation (docs 060, 100).
+
+---
+
+## 12. Reference
+
+**Architectural reasoning**: See `CLD_PRIMER.md` - Feedback loops section  
+**Integration context**: See `docs/060-integration-baklava-adapter.mdc`  
+**Next steps**: See `docs/100-integration-guide.mdc` - Step 1 onward  
+**Cursor rules**: `.cursor/rules/300-cld-engine-baklava-integration.mdc`

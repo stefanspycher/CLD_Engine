@@ -22,4 +22,5 @@ Document map:
 - `080-cursor-ide-usage.mdc` – how Cursor should be configured and how to use these docs during implementation.
 - `090-user-manual.mdc` – comprehensive user manual: how to use and interact with CLD-Engine.
 - `100-integration-guide.mdc` – step-by-step integration guide for BaklavaJS playground.
+- `110-baklava-cycle-enablement.mdc` – **PREREQUISITE**: enable cycles in BaklavaJS (required before adapter work).
 
