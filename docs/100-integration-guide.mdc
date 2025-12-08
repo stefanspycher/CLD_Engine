@@ -1,0 +1,759 @@
+---
+description: STEP-BY-STEP INTEGRATION GUIDE FOR BAKLAVAJS - HOW TO INTEGRATE CLD-ENGINE INTO BAKLAVAJS PLAYGROUND
+---
+
+# 100 – BaklavaJS Integration Guide
+
+## 1. Overview
+
+This guide provides step-by-step instructions for integrating CLD-Engine into a BaklavaJS playground. The integration requires creating an adapter layer that:
+
+1. Converts BaklavaJS graphs to CLD-Engine graphs
+2. Executes CLD-Engine with appropriate strategies
+3. Writes execution results back to BaklavaJS nodes
+
+**Important**: CLD-Engine is a headless library with no BaklavaJS dependencies. All integration code lives in the BaklavaJS workspace.
+
+---
+
+## 2. Prerequisites
+
+### 2.1 Required Knowledge
+
+- TypeScript
+- BaklavaJS core concepts (Editor, Graph, Node, Connection)
+- CLD-Engine API (see `docs/090-user-manual.mdc`)
+
+### 2.2 Required Files
+
+- CLD-Engine package (built or source)
+- BaklavaJS playground setup
+- CLDVariableNode implementation (or similar CLD nodes)
+
+### 2.3 Project Structure
+
+```
+baklavajs-workspace/
+├── packages/
+│   └── renderer-vue/
+│       └── playground/
+│           ├── CLDVariableNode.ts          # Your CLD node
+│           ├── adapter/                    # NEW: Adapter code
+│           │   ├── index.ts               # Adapter entry point
+│           │   ├── graphMapper.ts          # Baklava → CLD-Engine graph
+│           │   ├── nodeMapper.ts           # Baklava node → NodeDefinition
+│           │   └── resultMapper.ts         # ExecutionResult → Baklava nodes
+│           └── App.vue                     # Main playground file
+```
+
+---
+
+## 3. Step 1: Install CLD-Engine
+
+### 3.1 Option A: Local Path (Development)
+
+If CLD-Engine is in a local directory:
+
+```bash
+cd packages/renderer-vue/playground
+npm install /path/to/CLD-Engine
+# or
+pnpm add /path/to/CLD-Engine
+```
+
+### 3.2 Option B: Published Package
+
+If CLD-Engine is published to npm:
+
+```bash
+cd packages/renderer-vue/playground
+npm install cld-engine
+# or
+pnpm add cld-engine
+```
+
+### 3.3 Verify Installation
+
+```typescript
+// In a test file or console
+import { CLDEngine, SinglePassStrategy } from "cld-engine";
+console.log("CLD-Engine imported successfully");
+```
+
+---
+
+## 4. Step 2: Create Adapter Structure
+
+Create the adapter directory structure:
+
+```bash
+mkdir -p packages/renderer-vue/playground/adapter
+```
+
+Create these files:
+- `adapter/index.ts` - Main adapter interface
+- `adapter/graphMapper.ts` - Graph conversion
+- `adapter/nodeMapper.ts` - Node conversion
+- `adapter/resultMapper.ts` - Result application
+
+---
+
+## 5. Step 3: Map Baklava Graph to CLD-Engine Graph
+
+Create `adapter/graphMapper.ts`:
+
+```typescript
+import type { Graph as BaklavaGraph, Node, Connection } from "@baklavajs/core";
+import type { Graph as CLDGraph, NodeDefinition, Edge } from "cld-engine";
+import { createGraph, addNode, addEdge } from "cld-engine";
+import { mapBaklavaNodeToCLDNode } from "./nodeMapper";
+
+/**
+ * Converts a BaklavaJS graph to a CLD-Engine graph.
+ * 
+ * @param baklavaGraph - The BaklavaJS graph to convert
+ * @returns CLD-Engine graph ready for execution
+ */
+export function convertBaklavaGraphToCLDGraph(
+  baklavaGraph: BaklavaGraph
+): CLDGraph {
+  let cldGraph = createGraph();
+
+  // Step 1: Convert all nodes
+  for (const baklavaNode of baklavaGraph.nodes) {
+    const cldNode = mapBaklavaNodeToCLDNode(baklavaNode);
+    if (cldNode) {
+      cldGraph = addNode(cldGraph, cldNode);
+    }
+  }
+
+  // Step 2: Convert all connections (edges)
+  for (const connection of baklavaGraph.connections) {
+    const cldEdge = convertConnectionToEdge(connection);
+    if (cldEdge) {
+      cldGraph = addEdge(cldGraph, cldEdge);
+    }
+  }
+
+  return cldGraph;
+}
+
+/**
+ * Converts a BaklavaJS connection to a CLD-Engine edge.
+ */
+function convertConnectionToEdge(connection: Connection): Edge | null {
+  const fromNodeId = connection.from.nodeId;
+  const fromPortId = connection.from.interfaceId;
+  const toNodeId = connection.to.nodeId;
+  const toPortId = connection.to.interfaceId;
+
+  // Generate edge ID from connection
+  const edgeId = `e_${fromNodeId}_${fromPortId}_${toNodeId}_${toPortId}`;
+
+  return {
+    id: edgeId,
+    fromNodeId,
+    fromPortId,
+    toNodeId,
+    toPortId,
+  };
+}
+```
+
+---
+
+## 6. Step 4: Map Baklava Nodes to CLD-Engine NodeDefinitions
+
+Create `adapter/nodeMapper.ts`:
+
+```typescript
+import type { Node as BaklavaNode } from "@baklavajs/core";
+import type { NodeDefinition, ExecutionContext } from "cld-engine";
+import type { CLDVariableNode } from "../CLDVariableNode";
+
+/**
+ * Maps a BaklavaJS node to a CLD-Engine NodeDefinition.
+ * 
+ * Returns null if the node type is not supported.
+ */
+export function mapBaklavaNodeToCLDNode(
+  baklavaNode: BaklavaNode
+): NodeDefinition | null {
+  // Handle CLDVariableNode
+  if (baklavaNode.type === "CLDVariable") {
+    return mapCLDVariableNode(baklavaNode as unknown as CLDVariableNode);
+  }
+
+  // Add other node type mappings here
+  // if (baklavaNode.type === "OtherType") {
+  //   return mapOtherNode(baklavaNode);
+  // }
+
+  // Unsupported node type
+  return null;
+}
+
+/**
+ * Maps a CLDVariableNode to a CLD-Engine NodeDefinition.
+ */
+function mapCLDVariableNode(
+  baklavaNode: CLDVariableNode
+): NodeDefinition {
+  // Extract initial state from Baklava node
+  const baseValue = baklavaNode.baseValue ?? 100;
+  const currentValue = baklavaNode.currentValue ?? baseValue;
+
+  return {
+    id: baklavaNode.id,
+    type: "CLDVariable",
+    state: {
+      currentValue,
+      baseValue,
+    },
+    inputs: {
+      positive: {
+        id: "positive",
+        name: "positive",
+        kind: "input",
+      },
+      negative: {
+        id: "negative",
+        name: "negative",
+        kind: "input",
+      },
+    },
+    outputs: {
+      out: {
+        id: "out",
+        name: "out",
+        kind: "output",
+      },
+    },
+    calculate(inputValues, ctx) {
+      // Get current state
+      const state = ctx.getState();
+      const currentValue = state.currentValue ?? state.baseValue ?? 0;
+
+      // Process inputs (deltas from positive and negative ports)
+      const positive = inputValues.positive ?? 0;
+      const negative = inputValues.negative ?? 0;
+      const netDelta = positive - negative;
+
+      // Update state
+      const newValue = currentValue + netDelta;
+      ctx.setState({
+        ...state,
+        currentValue: newValue,
+      });
+
+      // Return output delta
+      return { out: netDelta };
+    },
+  };
+}
+```
+
+**Important Notes:**
+- The `calculate` function must match the behavior of your Baklava node's calculate function
+- Port IDs must match the interface IDs in your Baklava node
+- State structure should match what your Baklava node expects
+
+---
+
+## 7. Step 5: Create Initial State Map
+
+Create a function to extract initial state from Baklava nodes:
+
+```typescript
+// In adapter/nodeMapper.ts or adapter/index.ts
+
+import type { Graph as BaklavaGraph } from "@baklavajs/core";
+import type { NodeId } from "cld-engine";
+
+/**
+ * Extracts initial state from BaklavaJS graph nodes.
+ */
+export function extractInitialState(
+  baklavaGraph: BaklavaGraph
+): Map<NodeId, any> {
+  const initialState = new Map<NodeId, any>();
+
+  for (const node of baklavaGraph.nodes) {
+    if (node.type === "CLDVariable") {
+      const cldNode = node as unknown as CLDVariableNode;
+      initialState.set(node.id, {
+        currentValue: cldNode.currentValue ?? cldNode.baseValue ?? 100,
+        baseValue: cldNode.baseValue ?? 100,
+      });
+    }
+    // Add other node types as needed
+  }
+
+  return initialState;
+}
+```
+
+---
+
+## 8. Step 6: Execute CLD-Engine
+
+Create `adapter/index.ts`:
+
+```typescript
+import type { Graph as BaklavaGraph } from "@baklavajs/core";
+import {
+  CLDEngine,
+  SinglePassStrategy,
+  MultiPassStrategy,
+  ConvergenceStrategy,
+  validateGraph,
+  type ExecutionResult,
+} from "cld-engine";
+import { convertBaklavaGraphToCLDGraph } from "./graphMapper";
+import { extractInitialState } from "./nodeMapper";
+import { applyExecutionResult } from "./resultMapper";
+
+export type ExecutionStrategyType = 
+  | "single-pass"
+  | { type: "multi-pass"; iterations: number }
+  | { type: "convergence"; threshold: number; maxIterations?: number };
+
+/**
+ * Executes a BaklavaJS graph using CLD-Engine.
+ * 
+ * @param baklavaGraph - The BaklavaJS graph to execute
+ * @param strategy - Execution strategy configuration
+ * @returns Execution result with state and outputs
+ */
+export async function executeCLDEngine(
+  baklavaGraph: BaklavaGraph,
+  strategy: ExecutionStrategyType = "single-pass"
+): Promise<ExecutionResult> {
+  // Step 1: Convert Baklava graph to CLD-Engine graph
+  const cldGraph = convertBaklavaGraphToCLDGraph(baklavaGraph);
+
+  // Step 2: Validate the graph
+  validateGraph(cldGraph);
+
+  // Step 3: Extract initial state
+  const initialState = extractInitialState(baklavaGraph);
+
+  // Step 4: Create strategy
+  let executionStrategy;
+  if (strategy === "single-pass") {
+    executionStrategy = new SinglePassStrategy();
+  } else if (strategy.type === "multi-pass") {
+    executionStrategy = new MultiPassStrategy(strategy.iterations);
+  } else if (strategy.type === "convergence") {
+    executionStrategy = new ConvergenceStrategy(
+      strategy.threshold,
+      strategy.maxIterations ?? 100
+    );
+  } else {
+    throw new Error(`Unknown strategy type: ${strategy}`);
+  }
+
+  // Step 5: Create engine and execute
+  const engine = new CLDEngine(executionStrategy);
+  const result = await engine.execute(cldGraph, initialState);
+
+  // Step 6: Apply results back to Baklava nodes
+  applyExecutionResult(baklavaGraph, result);
+
+  return result;
+}
+```
+
+---
+
+## 9. Step 7: Apply Results Back to Baklava Nodes
+
+Create `adapter/resultMapper.ts`:
+
+```typescript
+import type { Graph as BaklavaGraph } from "@baklavajs/core";
+import type { ExecutionResult, NodeId } from "cld-engine";
+import type { CLDVariableNode } from "../CLDVariableNode";
+
+/**
+ * Applies CLD-Engine execution results back to BaklavaJS nodes.
+ */
+export function applyExecutionResult(
+  baklavaGraph: BaklavaGraph,
+  result: ExecutionResult
+): void {
+  // Update each node's state and outputs
+  for (const [nodeId, state] of result.state.entries()) {
+    const baklavaNode = baklavaGraph.findNodeById(nodeId);
+    if (!baklavaNode) {
+      continue;
+    }
+
+    // Handle CLDVariableNode
+    if (baklavaNode.type === "CLDVariable") {
+      const cldNode = baklavaNode as unknown as CLDVariableNode;
+      
+      // Update current value from state
+      if (state.currentValue !== undefined) {
+        cldNode.currentValue = state.currentValue;
+        // Trigger UI update if needed
+        cldNode.updateCurrentValueDisplay?.();
+      }
+    }
+
+    // Handle outputs (update output interface values)
+    const outputs = result.outputs.get(nodeId);
+    if (outputs && baklavaNode.outputs) {
+      for (const [portName, value] of Object.entries(outputs)) {
+        const outputInterface = baklavaNode.outputs[portName];
+        if (outputInterface && typeof value === "number") {
+          outputInterface.value = value;
+        }
+      }
+    }
+  }
+}
+```
+
+**Note**: You may need to adjust this based on your CLDVariableNode implementation. Check if your node has methods like `updateCurrentValueDisplay()` or similar.
+
+---
+
+## 10. Step 8: Wire Up UI Triggers
+
+Update `App.vue` to use the adapter:
+
+```typescript
+// In App.vue <script setup>
+import { executeCLDEngine } from "./adapter";
+import type { ExecutionStrategyType } from "./adapter";
+
+// Add a function to execute CLD-Engine
+const executeCLD = async () => {
+  try {
+    const strategy: ExecutionStrategyType = "single-pass";
+    // Or: { type: "multi-pass", iterations: 5 }
+    // Or: { type: "convergence", threshold: 0.01, maxIterations: 100 }
+    
+    const result = await executeCLDEngine(
+      baklavaView.displayedGraph,
+      strategy
+    );
+    
+    console.log("Execution completed:", result);
+    console.log("Iterations:", result.iterations);
+    console.log("Final states:", result.state);
+    console.log("Final outputs:", result.outputs);
+  } catch (error) {
+    console.error("CLD-Engine execution failed:", error);
+  }
+};
+
+// Replace or enhance the existing calculate function
+const calculate = async () => {
+  // Option 1: Use CLD-Engine instead of Baklava engine
+  await executeCLD();
+  
+  // Option 2: Use both (if you want to compare)
+  // await executeCLD();
+  // console.log(await engine.runOnce("def"));
+};
+```
+
+Add a button in the template:
+
+```vue
+<template>
+  <div id="app">
+    <!-- ... existing template ... -->
+    <button @click="executeCLD">Execute CLD Engine</button>
+    <button @click="calculate">Calculate</button>
+    <!-- ... rest of template ... -->
+  </div>
+</template>
+```
+
+---
+
+## 11. Step 9: Handle Port Mapping
+
+Ensure port IDs match between Baklava interfaces and CLD-Engine ports:
+
+### 11.1 Check Interface IDs
+
+In your `CLDVariableNode.ts`, verify interface IDs:
+
+```typescript
+public onPlaced() {
+  // Input ports
+  this.addInput("positive", new NodeInterface<number>("+ In", 0));
+  // Interface ID will be "positive"
+  
+  this.addInput("negative", new NodeInterface<number>("- In", 0));
+  // Interface ID will be "negative"
+  
+  // Output port
+  this.addOutput("out", new NodeInterface<number>("Out", 0));
+  // Interface ID will be "out"
+}
+```
+
+### 11.2 Match in Node Mapper
+
+In `adapter/nodeMapper.ts`, ensure port IDs match:
+
+```typescript
+inputs: {
+  positive: { id: "positive", ... },  // Must match interface ID
+  negative: { id: "negative", ... },  // Must match interface ID
+},
+outputs: {
+  out: { id: "out", ... },  // Must match interface ID
+},
+```
+
+---
+
+## 12. Step 10: Testing the Integration
+
+### 12.1 Basic Test
+
+1. Create a simple graph with 2-3 CLDVariable nodes
+2. Connect them: A → B → C
+3. Click "Execute CLD Engine"
+4. Check console for results
+5. Verify node values updated correctly
+
+### 12.2 Cycle Test
+
+1. Create a cycle: A → B → C → A
+2. Use MultiPassStrategy with 3 iterations
+3. Verify back-edges work correctly
+4. Check that values propagate through cycles
+
+### 12.3 Convergence Test
+
+1. Create a graph that should converge
+2. Use ConvergenceStrategy
+3. Verify execution stops when values stabilize
+4. Check iteration count
+
+---
+
+## 13. Common Issues and Solutions
+
+### 13.1 Port ID Mismatches
+
+**Problem**: Values not flowing between nodes.
+
+**Solution**: 
+- Verify interface IDs match port IDs in node mapper
+- Check connection source/target interface IDs
+- Use console.log to debug port mappings
+
+### 13.2 State Not Updating
+
+**Problem**: Node values don't change after execution.
+
+**Solution**:
+- Verify `applyExecutionResult` is called
+- Check that state structure matches node expectations
+- Ensure `updateCurrentValueDisplay()` or similar is called
+- Verify node has setters for state properties
+
+### 13.3 Graph Validation Errors
+
+**Problem**: `validateGraph` throws errors.
+
+**Solution**:
+- Check all nodes are converted correctly
+- Verify all edges reference existing nodes/ports
+- Ensure port IDs are unique within each node
+- Check port kinds (input vs output) match
+
+### 13.4 Type Errors
+
+**Problem**: TypeScript compilation errors.
+
+**Solution**:
+- Ensure CLD-Engine types are imported correctly
+- Check node type assertions (`as unknown as CLDVariableNode`)
+- Verify interface compatibility between Baklava and CLD-Engine types
+
+---
+
+## 14. Advanced Integration Patterns
+
+### 14.1 Custom Node Types
+
+To add support for additional node types:
+
+```typescript
+// In adapter/nodeMapper.ts
+export function mapBaklavaNodeToCLDNode(
+  baklavaNode: BaklavaNode
+): NodeDefinition | null {
+  if (baklavaNode.type === "CLDVariable") {
+    return mapCLDVariableNode(baklavaNode);
+  }
+  
+  if (baklavaNode.type === "MyCustomNode") {
+    return mapMyCustomNode(baklavaNode);
+  }
+  
+  return null;
+}
+```
+
+### 14.2 Strategy Selection UI
+
+Add UI to select execution strategy:
+
+```vue
+<template>
+  <select v-model="selectedStrategy">
+    <option value="single-pass">Single Pass</option>
+    <option value="multi-pass">Multi Pass</option>
+    <option value="convergence">Convergence</option>
+  </select>
+  <input v-if="selectedStrategy === 'multi-pass'" v-model.number="iterations" type="number" />
+  <input v-if="selectedStrategy === 'convergence'" v-model.number="threshold" type="number" step="0.001" />
+</template>
+
+<script setup>
+const selectedStrategy = ref("single-pass");
+const iterations = ref(5);
+const threshold = ref(0.01);
+
+const executeCLD = async () => {
+  let strategy;
+  if (selectedStrategy.value === "single-pass") {
+    strategy = "single-pass";
+  } else if (selectedStrategy.value === "multi-pass") {
+    strategy = { type: "multi-pass", iterations: iterations.value };
+  } else {
+    strategy = { type: "convergence", threshold: threshold.value };
+  }
+  
+  await executeCLDEngine(baklavaView.displayedGraph, strategy);
+};
+</script>
+```
+
+### 14.3 Error Handling
+
+Add comprehensive error handling:
+
+```typescript
+const executeCLD = async () => {
+  try {
+    const result = await executeCLDEngine(baklavaGraph, strategy);
+    // Show success message
+  } catch (error) {
+    if (error instanceof Error) {
+      if (error.message.includes("validation")) {
+        // Show graph validation error
+        console.error("Graph validation failed:", error.message);
+      } else if (error.message.includes("Node")) {
+        // Show node execution error
+        console.error("Node execution failed:", error.message);
+      } else {
+        // Show generic error
+        console.error("Execution failed:", error.message);
+      }
+    }
+  }
+};
+```
+
+---
+
+## 15. Performance Considerations
+
+### 15.1 Graph Conversion Caching
+
+For frequently executed graphs, cache the conversion:
+
+```typescript
+let cachedCLDGraph: CLDGraph | null = null;
+let cachedGraphVersion = 0;
+
+function getCLDGraph(baklavaGraph: BaklavaGraph): CLDGraph {
+  // Invalidate cache if graph changed
+  if (baklavaGraph.version !== cachedGraphVersion) {
+    cachedCLDGraph = convertBaklavaGraphToCLDGraph(baklavaGraph);
+    cachedGraphVersion = baklavaGraph.version;
+  }
+  return cachedCLDGraph!;
+}
+```
+
+### 15.2 Incremental Updates
+
+Only update nodes that changed:
+
+```typescript
+export function applyExecutionResult(
+  baklavaGraph: BaklavaGraph,
+  result: ExecutionResult,
+  previousState?: Map<NodeId, any>
+): void {
+  for (const [nodeId, state] of result.state.entries()) {
+    // Skip if state hasn't changed
+    if (previousState?.get(nodeId) === state) {
+      continue;
+    }
+    
+    // Update node...
+  }
+}
+```
+
+---
+
+## 16. Complete Example
+
+Here's a complete minimal adapter implementation:
+
+```typescript
+// adapter/index.ts
+import type { Graph as BaklavaGraph } from "@baklavajs/core";
+import { CLDEngine, SinglePassStrategy, validateGraph } from "cld-engine";
+import { convertBaklavaGraphToCLDGraph } from "./graphMapper";
+import { extractInitialState } from "./nodeMapper";
+import { applyExecutionResult } from "./resultMapper";
+
+export async function executeCLDEngine(
+  baklavaGraph: BaklavaGraph
+) {
+  const cldGraph = convertBaklavaGraphToCLDGraph(baklavaGraph);
+  validateGraph(cldGraph);
+  const initialState = extractInitialState(baklavaGraph);
+  
+  const engine = new CLDEngine(new SinglePassStrategy());
+  const result = await engine.execute(cldGraph, initialState);
+  
+  applyExecutionResult(baklavaGraph, result);
+  return result;
+}
+```
+
+---
+
+## 17. Next Steps
+
+- Test with various graph topologies
+- Add support for additional node types
+- Implement strategy selection UI
+- Add error handling and user feedback
+- Optimize for performance if needed
+- Consider adding execution history/undo support
+
+---
+
+## 18. Reference
+
+- CLD-Engine User Manual: `docs/090-user-manual.mdc`
+- CLD-Engine API Design: `docs/030-api-design.mdc`
+- BaklavaJS Integration Rules: `.cursor/rules/300-cld-engine-baklava-integration.mdc`
+- CLD-Engine Architecture: `docs/020-architecture-overview.mdc`

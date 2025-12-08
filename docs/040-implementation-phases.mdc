@@ -1,0 +1,156 @@
+---
+description: ORDERED IMPLEMENTATION PHASES FOR CLD-ENGINE
+---
+
+# 040 – Implementation Phases
+
+This document describes the **ordered implementation plan** Cursor.ai should follow when building CLD-Engine. Each phase has explicit tasks and acceptance criteria.
+
+## Phase 0 – Repository Bootstrap
+
+Tasks:
+- Create minimal project scaffolding:
+  - `package.json` with:
+    - `"name": "cld-engine"`
+    - `"type": "module"`
+    - `"main": "dist/index.cjs"` (optional)
+    - `"module": "dist/index.js"`
+    - `"scripts"`: `build`, `test`, `lint` (stubs).
+  - `tsconfig.json` targeting ES2020, `"module": "ESNext"`, `"strict": true`.
+  - `src/index.ts` placeholder.
+- No runtime dependencies required initially.
+
+Acceptance:
+- `pnpm install` (or `npm install`) works.
+- `pnpm test` / `pnpm build` do not fail due to missing scripts (can be no-op or simple echo in early phase).
+
+## Phase 1 – Core Types and Graph Model
+
+Tasks:
+- Implement in `src/core/`:
+  - `types.ts`:
+    - `NodeId`, `PortId`.
+  - `Graph.ts`:
+    - `PortDescriptor`, `Edge`, `Graph` interfaces as described in `020-architecture-overview.mdc`.
+    - Helper functions:
+      - `createGraph()`: returns an empty graph.
+      - `addNode(graph, node)`: returns new graph with node added (or mutates, depending on design choice).
+      - `addEdge(graph, edge)`: ditto.
+      - `validateGraph(graph)`: throws or returns errors for missing node/port references.
+  - `ExecutionContext.ts`:
+    - `ExecutionContext<State>` interface.
+    - A concrete implementation used internally by the engine (e.g., class or factory).
+- Implement `INodeDefinition.ts` in `src/nodes/`:
+  - Generic `NodeDefinition<State, Inputs, Outputs>` type.
+  - Possibly a convenience factory for simple stateless nodes.
+
+Acceptance:
+- TypeScript compiles with no errors.
+- Simple unit tests (or inline test harness) can construct a minimal graph with two nodes and one edge and call `validateGraph` successfully.
+
+## Phase 2 – Strategy Interface and SinglePassStrategy (Naive Order)
+
+Tasks:
+- Implement `IExecutionStrategy` in `src/core/IExecutionStrategy.ts` with the signatures specified in `020-architecture-overview.mdc`.
+- Implement `strategies/SinglePassStrategy.ts`:
+  - Constructor can be parameterless.
+  - `determineExecutionOrder(graph)`:
+    - Returns `Array.from(graph.nodes.keys())` (assuming `Map<NodeId, NodeDefinition>`).
+  - `shouldContinue(iteration, results)`:
+    - Single-pass semantics: return `iteration < 1`.
+  - `getBackEdgeValues(iteration, previousResults)`:
+    - Always returns `new Map()`.
+
+Acceptance:
+- Strategy compiles and can be instantiated from `src/index.ts`.
+- Simple test: call `determineExecutionOrder` on a graph with known node IDs and verify order matches insertion order.
+
+## Phase 3 – CLDEngine Core Execution Loop (No SCC)
+
+Tasks:
+- Implement `engine/CLDEngine.ts`:
+  - Constructor accepts `strategy: IExecutionStrategy`.
+  - `execute(graph: Graph, initialState?: Map<NodeId, any>): Promise<ExecutionResult>` where:
+    - `ExecutionResult` is a type alias defined in this file (e.g., `{ state: Map<NodeId, any>; outputs: Map<NodeId, any>; iterations: number }`).
+  - Core loop as described in `020-architecture-overview.mdc`, **without** SCC/back-edge logic:
+    - Call `strategy.determineExecutionOrder`.
+    - Ignore back-edge semantics for now (no special handling; all inputs just read directly from previous node outputs in the same iteration).
+  - Implement `gatherInputs` and `applyOutputs` helpers local to the engine.
+- Implement a minimal **reference node** for testing in `src/nodes/VariableNode.ts`:
+  - State: `{ value: number }`.
+  - Inputs: `{ delta: number }`.
+  - Outputs: `{ delta: number }`.
+  - `calculate` adds `delta` to `state.value`, emits same `delta` as output.
+
+Acceptance:
+- For an acyclic chain A → B → C with all VariableNodes:
+  - Supplying a `delta` input into A yields correct accumulated state changes after one `execute` call.
+
+## Phase 4 – SCC + Modified Topological Sort
+
+Tasks:
+- Implement `topology/modifiedTopologicalSort.ts`:
+  - Tarjan SCC detection over **node IDs** using the graph edges to compute successors.
+  - Build component graph (DAG) of SCCs.
+  - Perform standard topological sort over component graph.
+  - Export `modifiedTopologicalSort(graph: Graph): NodeId[]`.
+- Update `SinglePassStrategy.determineExecutionOrder` to delegate to `modifiedTopologicalSort`.
+
+Acceptance:
+- Unit tests:
+  - Acyclic graph: order is a valid topological order.
+  - Simple cycle A→B→C→A: order includes all three; internal SCC ordering is arbitrary but stable.
+  - Multiple SCCs as described in the earlier spec (Phase 2 doc) produce expected component ordering.
+
+## Phase 5 – Back-Edge Handling (Zero for SinglePassStrategy)
+
+Tasks:
+- Extend `CLDEngine` execution to recognize back-edges in a given order:
+  - When executing node `N`, for each incoming edge from node `M`:
+    - If `M` appears **before** `N` in the execution order, use current iteration outputs for `M`.
+    - If `M` appears **after** `N`, treat the edge as a back-edge and use `backEdgeValues` map for its input value.
+- Implement `SinglePassStrategy.getBackEdgeValues` to always return an empty map (`new Map()`), so back-edges are effectively zeroed in Phase 2.
+
+Acceptance:
+- For cycle A→B→C→A with an execution order [A, B, C]:
+  - When running once with a pulse on A:
+    - A sees 0 from C.
+    - B sees A’s output.
+    - C sees B’s output.
+
+## Phase 6 – Advanced Strategies (Optional)
+
+Tasks:
+- `MultiPassStrategy`:
+  - `constructor(maxIterations: number)`.
+  - `determineExecutionOrder(graph)` delegates to `modifiedTopologicalSort`.
+  - `shouldContinue(iteration, results)` returns `iteration < maxIterations`.
+  - `getBackEdgeValues`:
+    - Uses previous iteration’s outputs to fill `${nodeId}.${portId}` keys.
+- `ConvergenceStrategy`:
+  - `constructor(threshold: number, maxIterations = 100)`.
+  - `shouldContinue` checks both iteration count and convergence:
+    - Convergence test logic is left as a TODO hook unless explicitly needed.
+
+Acceptance:
+- Basic multi-pass tests confirming:
+  - Back-edges see previous iteration values.
+  - Iteration counts match expectations.
+
+## Phase 7 – Public API Surface Hardening
+
+Tasks:
+- In `src/index.ts`:
+  - Export:
+    - Core types: `NodeId`, `PortId`, `Edge`, `Graph`, `NodeDefinition`, `ExecutionResult`.
+    - Engine: `CLDEngine`.
+    - Strategies: `SinglePassStrategy`, `MultiPassStrategy`, `ConvergenceStrategy`.
+  - Ensure no internal implementation types leak unintentionally.
+- Add JSDoc comments oriented to library consumers (not mandatory for Cursor).
+
+Acceptance:
+- External consumer (e.g., Baklava adapter) can:
+  - Import `Graph`, build a graph.
+  - Instantiate `CLDEngine` with `SinglePassStrategy`.
+  - Run `execute` and inspect results.
+

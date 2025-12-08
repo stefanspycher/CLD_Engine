@@ -1,0 +1,15 @@
+# Exclude only generated / heavy content from indexing.
+# Keep src/ and docs/ fully visible to Cursor for reasoning.
+
+# Build artifacts
+**/dist/
+**/build/
+**/coverage/
+
+# Dependencies
+**/node_modules/
+
+# VCS metadata
+**/.git/
+
+

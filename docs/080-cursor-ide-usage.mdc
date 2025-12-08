@@ -1,0 +1,60 @@
+---
+description: CURSOR IDE USAGE AND CONFIGURATION FOR CLD-ENGINE
+---
+
+# 080 – Cursor IDE Usage
+
+This document tells Cursor.ai how to optimally use this project structure and docs when implementing CLD-Engine and integrating it with BaklavaJS.
+
+## 1. Reading Order for Implementation
+
+When starting or resuming CLD-Engine work, Cursor should:
+
+1. Read `docs/000-index.mdc` to confirm the document map.
+2. Read `docs/010-goals-and-scope.mdc` to refresh constraints and objectives.
+3. Read `docs/020-architecture-overview.mdc` to recall the core architecture and API design.
+4. Read `docs/040-implementation-phases.mdc` to determine the next incomplete phase and detailed tasks.
+5. For initial scaffolding or when touching tooling, read `docs/050-project-setup.mdc`.
+
+The adapter integration with Baklava should be deferred until core phases are complete; at that time, read the integration doc in the Baklava workspace (to be created separately).
+
+## 2. Preferred Tooling Behavior in Cursor
+
+Cursor should:
+
+- Use `apply_patch` to modify files under `CLD-Engine/`.
+- Avoid editing `packages/core` or `packages/engine` in the Baklava repo when working on CLD-Engine.
+- When it needs Baklava reference behavior:
+  - Use `read_file` and `grep` on the Baklava workspace.
+  - Do not copy code verbatim; instead, adapt concepts to the CLD-Engine data model.
+
+## 3. Implementation Loop (Per Phase)
+
+For each phase described in `040-implementation-phases.mdc`, Cursor should:
+
+1. Identify current phase’s tasks and acceptance criteria.
+2. Implement or update the relevant files under `src/`.
+3. Optionally add or update minimal tests under `test/` or `src/__tests__/`.
+4. Run TypeScript type-checking (if wired into tools) or at least ensure no type errors logically.
+5. Once acceptance criteria are met, consider that phase “complete” and proceed to the next phase.
+
+## 4. Cross-Workspace Interaction (Baklava + CLD-Engine)
+
+When building adapters or integration code in the Baklava workspace:
+
+- Treat CLD-Engine as a library with documented API from `src/index.ts`.
+- Use `read_file` to inspect:
+  - Baklava `Graph`, `Editor`, and CLDVariableNode implementations for mapping needs.
+- Design an adapter that:
+  - Reads Baklava graphs and produces CLD-Engine `Graph` instances.
+  - Maps CLD-Engine execution results back into Baklava nodes/state.
+
+## 5. Cursor Settings Suggestions (For the Human User)
+
+To make CLD-Engine work smoother with Cursor:
+
+- Ensure the `CLD-Engine/` folder is part of the active workspace.
+- Prefer default codebase search behavior (Cursor chooses chunks) for:
+  - `src/core/`, `src/nodes/`, and `docs/` under `CLD-Engine/`.
+- Keep web search **off** for CLD-Engine work unless explicitly needed, to avoid noisy context.
+

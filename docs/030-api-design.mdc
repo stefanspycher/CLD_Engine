@@ -1,0 +1,196 @@
+---
+description: PUBLIC API DESIGN FOR CLD-ENGINE LIBRARY
+---
+
+# 030 – API Design
+
+## 1. Top-Level Exports (src/index.ts)
+
+`src/index.ts` should re-export the minimal surface needed by consumers:
+
+- Types:
+  - `NodeId`, `PortId`
+  - `PortDescriptor`
+  - `Edge`
+  - `Graph`
+  - `NodeDefinition<State, Inputs, Outputs>`
+  - `ExecutionContext<State>` (if useful to consumers)
+  - `ExecutionResult`
+- Engine:
+  - `CLDEngine`
+- Strategies:
+  - `IExecutionStrategy`
+  - `SinglePassStrategy`
+  - `MultiPassStrategy` (optional)
+  - `ConvergenceStrategy` (optional)
+
+Implementation note for Cursor:
+- Keep `src/index.ts` as the **single source of truth** for public exports.
+- Avoid re-exporting internal helpers that are not part of the conceptual API (e.g., Tarjan internals).
+
+## 2. Engine API
+
+### 2.1 CLDEngine Constructor
+
+```ts
+import { CLDEngine, IExecutionStrategy } from "cld-engine";
+
+const engine = new CLDEngine(strategy: IExecutionStrategy);
+```
+
+Properties:
+- The engine is **stateless** between `execute` calls except for internal caches if needed (e.g., cached topo results). State is always supplied by the caller.
+
+### 2.2 execute Signature
+
+Target signature:
+
+```ts
+type StateMap = Map<NodeId, any>;
+
+export interface ExecutionResult {
+  state: StateMap;            // final node state after last iteration
+  outputs: Map<NodeId, any>;  // outputs returned by each node in the last iteration
+  iterations: number;         // number of iterations executed
+}
+
+class CLDEngine {
+  constructor(private strategy: IExecutionStrategy) {}
+
+  async execute(
+    graph: Graph,
+    initialState?: StateMap
+  ): Promise<ExecutionResult>;
+}
+```
+
+Semantics:
+- `initialState`:
+  - Optional map from `nodeId` to arbitrary state object.
+  - If omitted, the engine should initialize state by reading `node.state` or by defaulting to `{}`.
+- `state` in `ExecutionResult`:
+  - Reflects final state after all iterations (including multi-pass strategies).
+- `outputs`:
+  - For each node: the output object returned by the **last** call to `calculate` in the last iteration.
+
+## 3. Node Definition API
+
+### 3.1 NodeDefinition
+
+Consumer-facing type:
+
+```ts
+export interface NodeDefinition<State = any, Inputs = any, Outputs = any> {
+  id: NodeId;
+  type: string;
+  state: State;
+  inputs: Record<string, PortDescriptor>;
+  outputs: Record<string, PortDescriptor>;
+
+  calculate(
+    inputValues: Inputs,
+    ctx: ExecutionContext<State>
+  ): Outputs;
+}
+```
+
+Notes:
+- The engine does not enforce specific shapes for `Inputs` / `Outputs`:
+  - It only requires that `calculate` returns an object.
+  - The adapter layer (e.g., Baklava integration) is responsible for mapping port IDs to properties.
+- `state`:
+  - Mutable per execution only via `ctx.setState`.
+  - The engine should not mutate `node.state` directly; it owns a separate `Map<NodeId, State>`.
+
+### 3.2 ExecutionContext
+
+```ts
+export interface ExecutionContext<State = any> {
+  readonly nodeId: NodeId;
+  readonly iteration: number;
+  getState(): State;
+  setState(next: State): void;
+}
+```
+
+Behavior:
+- `getState` returns the current state for this node in the active execution.
+- `setState` schedules state replacement; engine should ensure this is visible to later accesses in the same iteration (for the same node).
+
+## 4. Graph API
+
+### 4.1 Graph Structure
+
+```ts
+export interface Graph {
+  nodes: Map<NodeId, NodeDefinition>;
+  edges: Edge[];
+}
+
+export interface Edge {
+  id: string;
+  fromNodeId: NodeId;
+  fromPortId: PortId;
+  toNodeId: NodeId;
+  toPortId: PortId;
+}
+```
+
+### 4.2 Helper Functions (Optional)
+
+Exposed helpers (if desired):
+
+```ts
+export function createGraph(): Graph;
+export function addNode(graph: Graph, node: NodeDefinition): Graph;
+export function addEdge(graph: Graph, edge: Edge): Graph;
+export function validateGraph(graph: Graph): void; // throws on invalid edges
+```
+
+These can be implemented as pure functions returning new graphs or as mutating helpers; immutability is preferred but not required.
+
+## 5. Strategy API
+
+### 5.1 IExecutionStrategy
+
+Exported as:
+
+```ts
+export interface IExecutionStrategy {
+  determineExecutionOrder(graph: Graph): NodeId[];
+
+  shouldContinue(
+    iteration: number,
+    results: Map<NodeId, any>
+  ): boolean;
+
+  getBackEdgeValues(
+    iteration: number,
+    previousResults?: Map<NodeId, any>
+  ): Map<string, number>;
+}
+```
+
+Key:
+- `getBackEdgeValues` key format:
+  - `${nodeId}.${portId}`.
+- Strategies must **not** mutate the graph.
+
+### 5.2 Built-In Strategies
+
+- `SinglePassStrategy`:
+  - `determineExecutionOrder` uses `modifiedTopologicalSort`.
+  - `shouldContinue` enforces single iteration.
+  - `getBackEdgeValues` returns empty map (all back-edges are zero in iteration 1).
+
+- `MultiPassStrategy`:
+  - `constructor(maxIterations: number)`.
+  - `shouldContinue` returns `iteration < maxIterations`.
+  - `getBackEdgeValues` uses previous iteration’s results.
+
+- `ConvergenceStrategy`:
+  - `constructor(threshold: number, maxIterations = 100)`.
+  - `shouldContinue` checks convergence and iteration cap.
+
+These strategies should be exported but may be marked in JSDoc as “experimental” if their API is likely to change.
+

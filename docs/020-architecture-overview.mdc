@@ -1,0 +1,194 @@
+---
+description: HIGH-LEVEL ARCHITECTURE FOR CLD-ENGINE HEADLESS LIBRARY
+---
+
+# 020 – Architecture Overview
+
+## 1. Top-Level Modules
+
+Target source layout:
+
+- `src/core/`
+  - `Graph.ts` – core graph data structures; nodes, ports, edges.
+  - `ExecutionContext.ts` – per-execution context types.
+  - `IExecutionStrategy.ts` – strategy abstraction.
+  - `strategies/SinglePassStrategy.ts` – single-pass implementation.
+  - `strategies/MultiPassStrategy.ts` (later).
+  - `strategies/ConvergenceStrategy.ts` (later).
+  - `topology/modifiedTopologicalSort.ts` – SCC + component DAG topo sort.
+  - `engine/CLDEngine.ts` – central execution engine.
+
+- `src/nodes/`
+  - `INodeDefinition.ts` – node contract for CLD-Engine.
+  - `VariableNode.ts` (optional reference implementation for pure engine tests).
+
+- `src/index.ts`
+  - Public exports for consumers (graph, engine, strategies, node contracts).
+
+## 2. Data Model
+
+### 2.1 Node and Port Model
+
+Node-level minimal contract:
+
+```ts
+export type NodeId = string;
+export type PortId = string;
+
+export interface PortDescriptor {
+  id: PortId;
+  name: string;
+  kind: "input" | "output";
+}
+
+export interface NodeDefinition<State = any, Inputs = any, Outputs = any> {
+  id: NodeId;
+  type: string;
+  state: State;
+  inputs: Record<string, PortDescriptor>;
+  outputs: Record<string, PortDescriptor>;
+
+  calculate(
+    inputValues: Inputs,
+    ctx: ExecutionContext<State>
+  ): Outputs;
+}
+```
+
+Engine-level `Graph` representation:
+
+```ts
+export interface Edge {
+  id: string;
+  fromNodeId: NodeId;
+  fromPortId: PortId;
+  toNodeId: NodeId;
+  toPortId: PortId;
+}
+
+export interface Graph {
+  nodes: Map<NodeId, NodeDefinition>;
+  edges: Edge[];
+}
+```
+
+Note: The actual implementation will add helpers (e.g., builders, accessors), but this is the conceptual target model.
+
+### 2.2 Execution Context
+
+Execution-time context (per run):
+
+```ts
+export interface ExecutionContext<State = any> {
+  readonly nodeId: NodeId;
+  readonly iteration: number;
+  getState(): State;
+  setState(next: State): void;
+  // optional hooks for logging, metrics, etc.
+}
+```
+
+The engine owns the authoritative state map: `Map<NodeId, any>`. The node only sees state via `getState`/`setState`.
+
+## 3. Execution Model
+
+### 3.1 High-Level Flow
+
+Entry point:
+
+```ts
+const engine = new CLDEngine(strategy);
+const result = await engine.execute(graph, initialState?);
+```
+
+Algorithm (conceptual):
+
+1. Initialize state map for all nodes from `initialState` or default node state.
+2. `iteration = 0; previousResults = undefined;`
+3. Loop:
+   - `iteration++`
+   - Determine execution order via `strategy.determineExecutionOrder(graph)`.
+   - Compute back-edge values:
+     - `backEdgeValues = strategy.getBackEdgeValues(iteration, previousResults)`.
+   - Execute nodes in order:
+     - For each nodeId:
+       - Gather inputs (forward edges) and back-edge defaults for yet-unexecuted predecessors.
+       - Construct `ExecutionContext` for that node.
+       - Call node `calculate`.
+       - Store outputs and update node state via `ctx.setState`.
+   - `previousResults = currentResults`.
+   - Check continuation:
+     - If `!strategy.shouldContinue(iteration, currentResults)`, break.
+4. Return final outputs:
+   - Map from `nodeId` to last outputs (and/or state, depending on API design).
+
+### 3.2 Strategy Interface
+
+Logical design:
+
+```ts
+export interface IExecutionStrategy {
+  determineExecutionOrder(graph: Graph): NodeId[];
+
+  shouldContinue(
+    iteration: number,
+    results: Map<NodeId, any>
+  ): boolean;
+
+  getBackEdgeValues(
+    iteration: number,
+    previousResults?: Map<NodeId, any>
+  ): Map<string, number>; // key: `${nodeId}.${portId}`
+}
+```
+
+Interpretation:
+- **determineExecutionOrder**:
+  - Can be naive (graph insertion order) or SCC-based with component topo sort.
+- **shouldContinue**:
+  - Single-pass: `iteration < 1`.
+  - Multi-pass: `iteration < maxIterations`.
+  - Convergence: `iteration < maxIterations && !hasConverged(results)`.
+- **getBackEdgeValues**:
+  - Phase 2: empty map (all back-edges implicitly zero).
+  - Multi-pass: uses previous iteration’s outputs to fill back-edge initial values.
+
+### 3.3 Back-Edge Semantics
+
+Definition:
+- A connection from `A → B` is a **back-edge** in a given iteration if:
+  - `A` appears **after** `B` in the chosen execution order.
+  - Thus, when executing `B`, `A`’s outputs for this iteration are not available yet.
+
+Handling rules:
+- For Phase 2 (SinglePassStrategy):
+  - All back-edge inputs are treated as **0** (no feedback in the first iteration).
+- For later strategies:
+  - Back-edges read from previous iteration’s outputs via `getBackEdgeValues`.
+
+This is conceptually similar to the Phase 2 spec from Baklava, but defined on the pure CLD-Engine graph types.
+
+## 4. Error Handling and Invariants
+
+- Graph invariants:
+  - Node IDs must be unique.
+  - Port IDs must be unique within a node.
+  - Edges must reference existing nodes and ports.
+  - Engine may perform a one-time validation pass before execution.
+
+- Execution invariants:
+  - Every node in `executionOrder` must exist in `graph.nodes`.
+  - Node `calculate` must return an object with keys matching defined outputs (can be relaxed later if needed).
+  - Node `calculate` must be pure **with respect to inputs** and side-effect-free except for `ctx.setState` (recommended, not enforced).
+
+## 5. Relation to BaklavaJS
+
+Reference usage:
+- BaklavaGraph → Adapter → CLD-Engine `Graph`.
+- CLD-Engine `execute` → new node states, outputs.
+- Adapter writes results back into Baklava nodes (e.g., CLDVariable’s `currentValue`).
+
+No direct dependency:
+- `src/` of CLD-Engine must not import Baklava packages.
+- Integration logic lives in Baklava workspace and uses CLD-Engine as a library.
+

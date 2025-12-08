@@ -1,0 +1,751 @@
+---
+description: COMPREHENSIVE USER MANUAL FOR CLD-ENGINE - HOW TO USE AND INTERACT WITH THE ENGINE
+---
+
+# 090 – User Manual
+
+## 1. Introduction
+
+CLD-Engine is a headless execution engine for Causal Loop Diagrams (CLDs). It provides a pure TypeScript library for executing graphs with cycles, delta-based propagation, and pluggable execution strategies.
+
+### 1.1 Key Features
+
+- **Cycle Support**: Handles arbitrary cycles in graphs (no DAG-only constraint)
+- **Delta Propagation**: Nodes emit changes (deltas) rather than absolute values
+- **State Management**: Nodes maintain internal state that updates with deltas
+- **Execution Strategies**: Pluggable strategies (single-pass, multi-pass, convergence)
+- **Headless**: No UI dependencies - pure computation engine
+
+### 1.2 Core Concepts
+
+- **Node**: Computation unit with inputs, outputs, and internal state
+- **Port**: Input or output connection point on a node
+- **Edge**: Directed connection from an output port to an input port
+- **Graph**: Collection of nodes and edges
+- **Strategy**: Determines execution order and iteration control
+- **Back-Edge**: Edge from a node that executes later to one that executes earlier
+
+---
+
+## 2. Installation
+
+### 2.1 Package Installation
+
+```bash
+# If published as npm package
+npm install cld-engine
+
+# Or if using from local path
+npm install /path/to/CLD-Engine
+```
+
+### 2.2 Import the Engine
+
+```typescript
+import {
+  CLDEngine,
+  SinglePassStrategy,
+  MultiPassStrategy,
+  ConvergenceStrategy,
+  createGraph,
+  addNode,
+  addEdge,
+  validateGraph,
+  type Graph,
+  type NodeDefinition,
+  type Edge,
+} from "cld-engine";
+```
+
+---
+
+## 3. Basic Usage
+
+### 3.1 Creating a Graph
+
+Graphs are created using helper functions that return new graph instances (immutable pattern):
+
+```typescript
+import { createGraph, addNode, addEdge } from "cld-engine";
+
+// Start with an empty graph
+let graph = createGraph();
+
+// Add nodes
+graph = addNode(graph, nodeA);
+graph = addNode(graph, nodeB);
+
+// Add edges
+graph = addEdge(graph, {
+  id: "e1",
+  fromNodeId: "A",
+  fromPortId: "delta",
+  toNodeId: "B",
+  toPortId: "delta",
+});
+
+// Validate the graph (recommended before execution)
+validateGraph(graph);
+```
+
+### 3.2 Creating Nodes
+
+A node implements the `NodeDefinition` interface:
+
+```typescript
+import type { NodeDefinition, ExecutionContext } from "cld-engine";
+
+interface MyNodeState {
+  value: number;
+}
+
+interface MyNodeInputs {
+  delta: number;
+}
+
+interface MyNodeOutputs {
+  delta: number;
+}
+
+const myNode: NodeDefinition<MyNodeState, MyNodeInputs, MyNodeOutputs> = {
+  id: "A",
+  type: "variable",
+  state: { value: 0 }, // Initial state
+  inputs: {
+    delta: {
+      id: "delta",
+      name: "Delta",
+      kind: "input",
+    },
+  },
+  outputs: {
+    delta: {
+      id: "delta",
+      name: "Delta",
+      kind: "output",
+    },
+  },
+  calculate(inputValues, ctx) {
+    // Get current state
+    const currentState = ctx.getState();
+    
+    // Process inputs
+    const delta = inputValues.delta ?? 0;
+    const newValue = currentState.value + delta;
+    
+    // Update state
+    ctx.setState({ value: newValue });
+    
+    // Return outputs
+    return { delta };
+  },
+};
+```
+
+### 3.3 Creating Edges
+
+Edges connect output ports to input ports:
+
+```typescript
+import type { Edge } from "cld-engine";
+
+const edge: Edge = {
+  id: "e1",                    // Unique edge identifier
+  fromNodeId: "A",             // Source node ID
+  fromPortId: "delta",          // Source output port ID
+  toNodeId: "B",                // Target node ID
+  toPortId: "delta",            // Target input port ID
+};
+```
+
+### 3.4 Executing a Graph
+
+```typescript
+import { CLDEngine, SinglePassStrategy } from "cld-engine";
+
+// Create an engine with a strategy
+const strategy = new SinglePassStrategy();
+const engine = new CLDEngine(strategy);
+
+// Execute the graph
+const result = await engine.execute(graph);
+
+// Access results
+console.log(result.iterations);        // Number of iterations executed
+console.log(result.outputs);           // Map<NodeId, Outputs> - node outputs
+console.log(result.state);             // Map<NodeId, State> - final node states
+
+// Get specific node results
+const nodeAOutputs = result.outputs.get("A");
+const nodeAState = result.state.get("A");
+```
+
+---
+
+## 4. Execution Strategies
+
+CLD-Engine supports three execution strategies:
+
+### 4.1 SinglePassStrategy
+
+Executes the graph exactly once. Back-edges receive zero values.
+
+```typescript
+import { SinglePassStrategy } from "cld-engine";
+
+const strategy = new SinglePassStrategy();
+const engine = new CLDEngine(strategy);
+const result = await engine.execute(graph);
+
+// result.iterations will always be 1
+```
+
+**Use Cases:**
+- Simple acyclic graphs
+- First iteration of multi-pass scenarios
+- Testing and debugging
+
+### 4.2 MultiPassStrategy
+
+Executes the graph a fixed number of times. Back-edges receive values from the previous iteration.
+
+```typescript
+import { MultiPassStrategy } from "cld-engine";
+
+// Execute 5 iterations
+const strategy = new MultiPassStrategy(5);
+const engine = new CLDEngine(strategy);
+const result = await engine.execute(graph);
+
+// result.iterations will be 5 (or less if stopped early)
+```
+
+**Use Cases:**
+- Simulating systems over multiple time steps
+- Iterative algorithms that need fixed iteration count
+- Testing convergence behavior
+
+**Example:**
+```typescript
+// Create a cycle: A → B → A
+const strategy = new MultiPassStrategy(3);
+const engine = new CLDEngine(strategy);
+const result = await engine.execute(graph);
+
+// Iteration 1: Back-edge from A to B receives 0
+// Iteration 2: Back-edge receives A's output from iteration 1
+// Iteration 3: Back-edge receives A's output from iteration 2
+```
+
+### 4.3 ConvergenceStrategy
+
+Executes until values converge (change by less than threshold) or max iterations is reached.
+
+```typescript
+import { ConvergenceStrategy } from "cld-engine";
+
+// Threshold: 0.01, Max iterations: 100
+const strategy = new ConvergenceStrategy(0.01, 100);
+const engine = new CLDEngine(strategy);
+const result = await engine.execute(graph);
+
+// result.iterations will be <= 100
+// Execution stops early if values converge
+```
+
+**Use Cases:**
+- Finding steady-state solutions
+- Iterative algorithms that converge
+- Systems that stabilize over time
+
+**Example:**
+```typescript
+// Execute until values stabilize within 0.001
+const strategy = new ConvergenceStrategy(0.001, 1000);
+const engine = new CLDEngine(strategy);
+const result = await engine.execute(graph);
+
+if (result.iterations < 1000) {
+  console.log("Converged after", result.iterations, "iterations");
+} else {
+  console.log("Reached max iterations without convergence");
+}
+```
+
+---
+
+## 5. Node Definition Patterns
+
+### 5.1 Variable Node Pattern
+
+A variable node that accumulates deltas:
+
+```typescript
+function createVariableNode(id: string, initialValue: number = 0) {
+  return {
+    id,
+    type: "variable",
+    state: { value: initialValue },
+    inputs: {
+      delta: { id: "delta", name: "Delta", kind: "input" },
+    },
+    outputs: {
+      delta: { id: "delta", name: "Delta", kind: "output" },
+    },
+    calculate(inputs, ctx) {
+      const state = ctx.getState();
+      const delta = inputs.delta ?? 0;
+      const newValue = state.value + delta;
+      ctx.setState({ value: newValue });
+      return { delta };
+    },
+  };
+}
+```
+
+### 5.2 Constant Node Pattern
+
+A node that always outputs a constant value:
+
+```typescript
+function createConstantNode(id: string, value: number) {
+  return {
+    id,
+    type: "constant",
+    state: {},
+    inputs: {},
+    outputs: {
+      out: { id: "out", name: "Out", kind: "output" },
+    },
+    calculate() {
+      return { out: value };
+    },
+  };
+}
+```
+
+### 5.3 Dual Input Node Pattern
+
+A node with positive and negative inputs (common in CLD):
+
+```typescript
+function createDualInputNode(id: string, initialValue: number = 0) {
+  return {
+    id,
+    type: "variable",
+    state: { value: initialValue },
+    inputs: {
+      positive: { id: "positive", name: "+", kind: "input" },
+      negative: { id: "negative", name: "-", kind: "input" },
+    },
+    outputs: {
+      delta: { id: "delta", name: "Delta", kind: "output" },
+    },
+    calculate(inputs, ctx) {
+      const state = ctx.getState();
+      const positive = inputs.positive ?? 0;
+      const negative = inputs.negative ?? 0;
+      const netDelta = positive - negative;
+      const newValue = state.value + netDelta;
+      ctx.setState({ value: newValue });
+      return { delta: netDelta };
+    },
+  };
+}
+```
+
+### 5.4 Stateful Node Pattern
+
+A node that maintains complex state:
+
+```typescript
+interface ComplexState {
+  value: number;
+  history: number[];
+  lastUpdate: number;
+}
+
+function createStatefulNode(id: string) {
+  return {
+    id,
+    type: "stateful",
+    state: {
+      value: 0,
+      history: [],
+      lastUpdate: 0,
+    } as ComplexState,
+    inputs: {
+      delta: { id: "delta", name: "Delta", kind: "input" },
+    },
+    outputs: {
+      value: { id: "value", name: "Value", kind: "output" },
+      history: { id: "history", name: "History", kind: "output" },
+    },
+    calculate(inputs, ctx) {
+      const state = ctx.getState();
+      const delta = inputs.delta ?? 0;
+      const newValue = state.value + delta;
+      const newHistory = [...state.history, newValue].slice(-10); // Keep last 10
+      
+      ctx.setState({
+        value: newValue,
+        history: newHistory,
+        lastUpdate: ctx.iteration,
+      });
+      
+      return {
+        value: newValue,
+        history: newHistory,
+      };
+    },
+  };
+}
+```
+
+---
+
+## 6. Execution Context
+
+The `ExecutionContext` provides access to node state and execution information:
+
+```typescript
+interface ExecutionContext<State = any> {
+  readonly nodeId: NodeId;      // Current node's ID
+  readonly iteration: number;    // Current iteration (1-indexed)
+  getState(): State;             // Get current node state
+  setState(next: State): void;  // Update node state
+}
+```
+
+### 6.1 Using Execution Context
+
+```typescript
+calculate(inputs, ctx) {
+  // Access node ID and iteration
+  console.log(`Node ${ctx.nodeId} executing in iteration ${ctx.iteration}`);
+  
+  // Get current state
+  const currentState = ctx.getState();
+  
+  // Update state
+  ctx.setState({ ...currentState, value: newValue });
+  
+  return outputs;
+}
+```
+
+**Important Notes:**
+- State updates via `setState` are visible immediately within the same iteration
+- State persists across iterations (for multi-pass strategies)
+- Each node has its own isolated state
+
+---
+
+## 7. Initial State
+
+You can provide initial state when executing:
+
+```typescript
+// Create initial state map
+const initialState = new Map<string, any>();
+initialState.set("A", { value: 100 });
+initialState.set("B", { value: 50 });
+
+// Execute with initial state
+const result = await engine.execute(graph, initialState);
+
+// Nodes without initial state use their default state from node definition
+```
+
+**State Initialization Rules:**
+1. If `initialState` provides a value for a node, that value is used
+2. Otherwise, the node's `state` property from its definition is used
+3. If neither exists, an empty object `{}` is used
+
+---
+
+## 8. Complete Example
+
+Here's a complete example building and executing a simple graph:
+
+```typescript
+import {
+  CLDEngine,
+  SinglePassStrategy,
+  createGraph,
+  addNode,
+  addEdge,
+  validateGraph,
+  type NodeDefinition,
+} from "cld-engine";
+
+// Create a constant node
+const constantNode: NodeDefinition = {
+  id: "INPUT",
+  type: "constant",
+  state: {},
+  inputs: {},
+  outputs: {
+    delta: { id: "delta", name: "Delta", kind: "output" },
+  },
+  calculate() {
+    return { delta: 5 };
+  },
+};
+
+// Create variable nodes
+function createVariableNode(id: string, initialValue: number): NodeDefinition {
+  return {
+    id,
+    type: "variable",
+    state: { value: initialValue },
+    inputs: {
+      delta: { id: "delta", name: "Delta", kind: "input" },
+    },
+    outputs: {
+      delta: { id: "delta", name: "Delta", kind: "output" },
+    },
+    calculate(inputs, ctx) {
+      const state = ctx.getState();
+      const delta = inputs.delta ?? 0;
+      const newValue = state.value + delta;
+      ctx.setState({ value: newValue });
+      return { delta };
+    },
+  };
+}
+
+const nodeA = createVariableNode("A", 10);
+const nodeB = createVariableNode("B", 20);
+
+// Build graph: INPUT → A → B
+let graph = createGraph();
+graph = addNode(graph, constantNode);
+graph = addNode(graph, nodeA);
+graph = addNode(graph, nodeB);
+graph = addEdge(graph, {
+  id: "e1",
+  fromNodeId: "INPUT",
+  fromPortId: "delta",
+  toNodeId: "A",
+  toPortId: "delta",
+});
+graph = addEdge(graph, {
+  id: "e2",
+  fromNodeId: "A",
+  fromPortId: "delta",
+  toNodeId: "B",
+  toPortId: "delta",
+});
+
+// Validate graph
+validateGraph(graph);
+
+// Execute
+const strategy = new SinglePassStrategy();
+const engine = new CLDEngine(strategy);
+const result = await engine.execute(graph);
+
+// Check results
+console.log("Iterations:", result.iterations); // 1
+console.log("A state:", result.state.get("A")); // { value: 15 }
+console.log("B state:", result.state.get("B")); // { value: 25 }
+console.log("A output:", result.outputs.get("A")); // { delta: 5 }
+console.log("B output:", result.outputs.get("B")); // { delta: 5 }
+```
+
+---
+
+## 9. Advanced Patterns
+
+### 9.1 Handling Multiple Edges to Same Port
+
+Multiple edges can connect to the same input port. Values are automatically summed:
+
+```typescript
+// If two edges connect to node B's "delta" input:
+// Edge 1: A.delta → B.delta (value: 5)
+// Edge 2: C.delta → B.delta (value: 3)
+// Node B receives: inputs.delta = 5 + 3 = 8
+```
+
+### 9.2 Back-Edge Handling
+
+Back-edges are edges where the source node executes after the target node:
+
+```typescript
+// Execution order: [A, B, C]
+// Edge C → A is a back-edge (C executes after A)
+// In SinglePassStrategy: back-edge receives 0
+// In MultiPassStrategy: back-edge receives C's output from previous iteration
+```
+
+### 9.3 Cycles
+
+CLD-Engine handles cycles naturally:
+
+```typescript
+// Cycle: A → B → C → A
+const strategy = new MultiPassStrategy(5);
+const engine = new CLDEngine(strategy);
+const result = await engine.execute(graph);
+
+// Each iteration:
+// - Forward edges use current iteration outputs
+// - Back-edges use previous iteration outputs
+```
+
+---
+
+## 10. Error Handling
+
+### 10.1 Graph Validation Errors
+
+Always validate your graph before execution:
+
+```typescript
+try {
+  validateGraph(graph);
+} catch (error) {
+  console.error("Graph validation failed:", error.message);
+  // Handle error
+}
+```
+
+**Common Validation Errors:**
+- Missing node referenced by edge
+- Missing port referenced by edge
+- Duplicate port IDs within a node
+- Port kind mismatch (input vs output)
+
+### 10.2 Execution Errors
+
+Execution errors can occur if:
+- Node not found in execution order
+- Node's `calculate` function throws
+- Invalid state access
+
+```typescript
+try {
+  const result = await engine.execute(graph);
+} catch (error) {
+  console.error("Execution failed:", error.message);
+  // Handle error
+}
+```
+
+---
+
+## 11. Best Practices
+
+### 11.1 Node Design
+
+- **Keep calculate functions pure**: Only side-effect should be `ctx.setState`
+- **Use TypeScript types**: Define `State`, `Inputs`, `Outputs` interfaces
+- **Handle undefined inputs**: Use `??` operator for optional inputs
+- **Return consistent outputs**: Always return an object matching output port names
+
+### 11.2 Graph Building
+
+- **Validate after building**: Always call `validateGraph()` before execution
+- **Use immutable pattern**: Assign graph updates: `graph = addNode(graph, node)`
+- **Unique IDs**: Ensure node IDs and edge IDs are unique
+- **Port naming**: Use consistent port names across similar nodes
+
+### 11.3 Strategy Selection
+
+- **Start simple**: Use `SinglePassStrategy` for initial development
+- **Test convergence**: Use `ConvergenceStrategy` for steady-state problems
+- **Fixed iterations**: Use `MultiPassStrategy` when you need exact iteration count
+
+### 11.4 State Management
+
+- **Initialize properly**: Set meaningful initial state in node definitions
+- **Use initialState**: Override initial state via `execute(graph, initialState)` when needed
+- **State immutability**: Treat state as immutable, create new objects in `setState`
+
+---
+
+## 12. Troubleshooting
+
+### 12.1 Nodes Not Executing
+
+**Problem**: Some nodes don't appear in results.
+
+**Solutions**:
+- Check that nodes are added to the graph
+- Verify edges connect correctly
+- Ensure execution order includes all nodes
+- Check for validation errors
+
+### 12.2 Unexpected Values
+
+**Problem**: Node values don't match expectations.
+
+**Solutions**:
+- Verify input values are being received correctly
+- Check for multiple edges summing incorrectly
+- Ensure state updates are happening (`ctx.setState`)
+- Check back-edge behavior (may be 0 in single-pass)
+
+### 12.3 Convergence Issues
+
+**Problem**: ConvergenceStrategy doesn't converge.
+
+**Solutions**:
+- Check threshold value (may be too small)
+- Verify convergence logic (all outputs must converge)
+- Increase maxIterations if needed
+- Check for oscillating values
+
+### 12.4 Performance Issues
+
+**Problem**: Execution is slow.
+
+**Solutions**:
+- Reduce graph size if possible
+- Use SinglePassStrategy instead of MultiPassStrategy
+- Optimize node calculate functions
+- Check for unnecessary state copying
+
+---
+
+## 13. API Reference Summary
+
+### 13.1 Core Types
+
+- `NodeId`: `string` - Unique node identifier
+- `PortId`: `string` - Unique port identifier
+- `Graph`: Graph structure with nodes and edges
+- `NodeDefinition<State, Inputs, Outputs>`: Node definition interface
+- `Edge`: Edge structure connecting ports
+- `ExecutionContext<State>`: Execution context for nodes
+- `ExecutionResult`: Result from engine execution
+
+### 13.2 Engine
+
+- `CLDEngine`: Main engine class
+  - `constructor(strategy: IExecutionStrategy)`
+  - `execute(graph: Graph, initialState?: Map<NodeId, any>): Promise<ExecutionResult>`
+
+### 13.3 Strategies
+
+- `SinglePassStrategy`: Single iteration strategy
+- `MultiPassStrategy(maxIterations: number)`: Fixed iteration strategy
+- `ConvergenceStrategy(threshold: number, maxIterations?: number)`: Convergence strategy
+
+### 13.4 Graph Helpers
+
+- `createGraph(): Graph`: Create empty graph
+- `addNode(graph: Graph, node: NodeDefinition): Graph`: Add node to graph
+- `addEdge(graph: Graph, edge: Edge): Graph`: Add edge to graph
+- `validateGraph(graph: Graph): void`: Validate graph structure
+
+---
+
+## 14. Next Steps
+
+- See `docs/100-integration-guide.mdc` for integrating with BaklavaJS
+- Review `docs/020-architecture-overview.mdc` for architecture details
+- Check `docs/030-api-design.mdc` for complete API reference
+- Explore test files in `test/` directory for more examples

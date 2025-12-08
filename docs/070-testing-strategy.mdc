@@ -1,0 +1,141 @@
+---
+description: TESTING STRATEGY FOR CLD-ENGINE
+---
+
+# 070 – Testing Strategy
+
+## 1. Testing Levels
+
+CLD-Engine should have tests at three main levels:
+
+1. **Unit tests for topology and utilities**
+   - Tarjan SCC implementation.
+   - Component DAG construction.
+   - Topological sort on component graph.
+   - Graph validation helpers.
+2. **Unit tests for strategies**
+   - `SinglePassStrategy` order and continuation behavior.
+   - `MultiPassStrategy` iteration count and back-edge value derivation.
+3. **Integration-like tests for engine + nodes**
+   - Small graphs with known expected node states and outputs.
+   - Specific CLD patterns (chain, cycles, multi-SCC).
+
+## 2. Recommended Test Locations
+
+- Use `src/__tests__/` co-located with source files or `test/` root directory.
+- Suggested structure:
+  - `src/__tests__/topology.spec.ts`
+  - `src/__tests__/strategies.spec.ts`
+  - `src/__tests__/engine.spec.ts`
+
+## 3. Topology Tests
+
+### 3.1 Acyclic Graph
+
+Scenario:
+- Nodes: A, B, C.
+- Edges: A→B, B→C.
+
+Expectations:
+- `modifiedTopologicalSort` returns `[A, B, C]` or equivalent topological order.
+- No SCC contains more than one node.
+
+### 3.2 Simple Cycle
+
+Scenario:
+- Nodes: A, B, C.
+- Edges: A→B, B→C, C→A.
+
+Expectations:
+- SCC detection returns a single SCC `[A, B, C]` (order can vary).
+- Component graph has exactly one node and no edges.
+- `modifiedTopologicalSort` returns a permutation of `[A, B, C]`.
+
+### 3.3 Multiple SCCs
+
+Scenario:
+- Nodes: A, B, C, D, E.
+- Edges:
+  - A→B, B→C, C→B (SCC1: {B, C})
+  - D→E (SCC2: {D, E}) or two isolated nodes depending on design.
+
+Expectations:
+- SCCs grouped correctly.
+- Component graph is a DAG.
+- Ordering respects cross-component dependencies.
+
+## 4. Strategy Tests
+
+### 4.1 SinglePassStrategy
+
+Tests:
+- For a given graph, `determineExecutionOrder` equals `modifiedTopologicalSort`.
+- `shouldContinue(0, ...)` returns `true`, `shouldContinue(1, ...)` returns `false` (or equivalent logic).
+- `getBackEdgeValues` always returns empty `Map`.
+
+### 4.2 MultiPassStrategy
+
+Tests:
+- With `maxIterations = 3`, `shouldContinue` returns:
+  - `true` for iterations 0, 1, 2.
+  - `false` for iteration ≥ 3.
+- `getBackEdgeValues`:
+  - When `previousResults` is undefined → returns empty map.
+  - When defined → populates back-edge keys from previous outputs.
+
+## 5. Engine + Node Tests
+
+### 5.1 Minimal Variable Node
+
+Use `nodes/VariableNode.ts`:
+- State: `{ value: number }`.
+- Inputs: `{ delta: number }`.
+- Outputs: `{ delta: number }`.
+- Behavior: `state.value += delta;` return `{ delta }`.
+
+### 5.2 Chain (No Cycles)
+
+Graph:
+- A→B→C, all VariableNodes.
+
+Test:
+- Inject delta 1 into A’s input port (via test harness).
+- Run engine once with `SinglePassStrategy`.
+- Expect:
+  - A.state.value increases by 1.
+  - B.state.value increases by 1.
+  - C.state.value increases by 1.
+
+### 5.3 Simple Cycle with Zero Back-Edges
+
+Graph:
+- A→B→C→A.
+
+Test:
+- Start with all `value = 100`.
+- Inject +1 delta into A.
+- Run engine once with `SinglePassStrategy`.
+- Expected conceptual behavior:
+  - A sees 0 from C (back-edge), but its own injection increments its state by 1.
+  - B sees A’s +1 delta.
+  - C sees B’s +1 delta.
+- Final states:
+  - A: 101, B: 101, C: 101.
+
+Implementation detail:
+- The test harness must simulate external injection by:
+  - Setting the `delta` input for A before calling `execute`.
+
+## 6. Test Harness Recommendations
+
+- Use `vitest` for test runner and assertions.
+- Keep tests deterministic:
+  - No reliance on timers or real concurrency.
+  - If async is used, it should be minimal and awaited.
+
+## 7. Adapter-Level Tests (In Baklava Workspace)
+
+Adapter tests should live in the Baklava repo (not in CLD-Engine), but this project’s tests should be structured to:
+- Validate pure engine behavior independently.
+- Provide simple examples (graph builders + nodes) that can be reused or mirrored in adapter tests.
+

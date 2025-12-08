@@ -1,0 +1,86 @@
+---
+description: BAKLAVA ADAPTER/INTEGRATION DESIGN FOR CLD-ENGINE
+---
+
+# 060 – Integration: Baklava Adapter
+
+## 1. Purpose
+
+This document defines how a BaklavaJS-based playground should integrate with CLD-Engine via an **adapter layer**. The adapter lives in the Baklava repository, not in CLD-Engine.
+
+## 2. High-Level Flow
+
+For a Baklava editor + graph:
+
+1. Extract a CLD-Engine `Graph` from Baklava’s `Editor.graph`.
+2. Run CLD-Engine with the desired strategy.
+3. Map resulting node states/outputs back into Baklava nodes (e.g., CLDVariableNode).
+
+CLD-Engine remains ignorant of Baklava’s internal types.
+
+## 3. Mapping: Baklava → CLD-Engine Graph
+
+### 3.1 Node Mapping
+
+For each Baklava node in the graph:
+- Assign `nodeId = baklavaNode.id`.
+- Determine node `type` from `baklavaNode.type`.
+- Determine initial `state`:
+  - For CLDVariableNode: state should include at least `{ currentValue: number, baseValue: number }`.
+  - For non-CLD nodes, state can be `{}` or a minimal object as needed.
+- Map inputs and outputs:
+  - Each Baklava input/output interface becomes a `PortDescriptor` with a generated `PortId`:
+    - Option A: Use the Baklava interface ID directly.
+    - Option B: Compose `${node.id}.${interfaceName}`.
+
+### 3.2 Edge Mapping
+
+For each Baklava `Connection`:
+- Source:
+  - `fromNodeId = connection.from.nodeId`.
+  - `fromPortId` derived from source interface (see above).
+- Target:
+  - `toNodeId = connection.to.nodeId`.
+  - `toPortId` derived similarly.
+
+Edges are added to the CLD-Engine `Graph` as `Edge` objects.
+
+## 4. Node Behavior Mapping
+
+The adapter must provide CLD-Engine **NodeDefinition** instances whose `calculate` behavior matches the semantics of the Baklava nodes in a CLD context.
+
+Example for CLDVariableNode:
+- Inputs:
+  - `positive`, `negative` (deltas).
+- Outputs:
+  - `out` (delta to propagate).
+- State:
+  - `{ currentValue: number, baseValue: number, pendingPulse: number, ... }`.
+- `calculate`:
+  - Follows the same delta logic as defined in CLDVariableNode spec (pulse handling, positive/negative aggregation, etc.).
+  - Uses `ExecutionContext` state instead of mutating the Baklava node directly.
+
+After execution:
+- The adapter writes back `state.currentValue` into the Baklava node instance (or its interfaces) as needed to update the UI.
+
+## 5. Execution Triggering
+
+In the Baklava playground:
+
+- The adapter should:
+  - Subscribe to relevant events (node updates, connections, button presses) or
+  - Provide an explicit “Run CLD Engine” action.
+
+Execution flow:
+1. Adapter constructs CLD-Engine `Graph` and initial state from current Baklava graph.
+2. Adapter calls `engine.execute(graph, initialState)`.
+3. Adapter receives `ExecutionResult`.
+4. Adapter writes back:
+   - Node state into corresponding Baklava node instances.
+   - Any needed transient values into interfaces if required for UI feedback.
+
+## 6. Versioning Boundary
+
+- CLD-Engine must not import or depend on Baklava packages.
+- Baklava integration code must treat CLD-Engine as an external library with a stable public API.
+

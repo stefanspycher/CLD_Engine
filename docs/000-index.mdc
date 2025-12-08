@@ -1,0 +1,25 @@
+---
+description: ROOT INDEX FOR CLD-ENGINE DESIGN DOCS. READ THIS FIRST.
+---
+
+# CLD-Engine – Design Root
+
+This directory contains machine-oriented design documents for a standalone, headless Causal Loop Diagram (CLD) execution engine.
+
+Reader assumptions:
+- Reader is Cursor.ai (or equivalent tool-driven assistant).
+- Reader has full access to this repository and to an existing BaklavaJS codebase for reference only.
+- Reader will follow these docs to implement the engine in phases.
+
+Document map:
+- `010-goals-and-scope.mdc` – primary goals, constraints, high-level scope.
+- `020-architecture-overview.mdc` – core concepts, data model, engine loop, strategy abstraction.
+- `030-api-design.mdc` – external API surface for consumers.
+- `040-implementation-phases.mdc` – ordered implementation phases and acceptance criteria.
+- `050-project-setup.mdc` – tooling, folder layout, minimal package configuration.
+- `060-integration-baklava-adapter.mdc` – adapter between CLD-Engine and BaklavaJS playground.
+- `070-testing-strategy.mdc` – testing layers and scenarios.
+- `080-cursor-ide-usage.mdc` – how Cursor should be configured and how to use these docs during implementation.
+- `090-user-manual.mdc` – comprehensive user manual: how to use and interact with CLD-Engine.
+- `100-integration-guide.mdc` – step-by-step integration guide for BaklavaJS playground.
+

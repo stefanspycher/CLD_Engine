@@ -1,0 +1,87 @@
+---
+description: PRIMARY GOALS AND SCOPE FOR CLD-ENGINE HEADLESS LIBRARY
+---
+
+# 010 – Goals and Scope
+
+## 1. Primary Objective
+
+Design and implement a **headless CLD execution engine** that:
+- Operates independently of any UI framework or editor.
+- Treats **cycles as first-class citizens** (no DAG-only constraint).
+- Uses **delta-based propagation** and internal node state (CLD variable semantics).
+- Supports **pluggable execution strategies** (single-pass, multi-pass, convergence).
+
+The engine is a standalone TypeScript library (no DOM, no Vue, no BaklavaJS runtime dependency). BaklavaJS is used only as an **inspiration and reference**, plus as a downstream consumer via a thin adapter.
+
+## 2. Non-Goals (Phase 1–2)
+
+- No visual editor, node UI components, or rendering layer.
+- No direct dependency on `@baklavajs/engine` or `@baklavajs/renderer-vue`.
+- No generic dataflow engine abstraction beyond what CLD needs.
+- No persistence format beyond a minimal serializable graph representation.
+
+## 3. Core Concepts (Target Model)
+
+High-level concepts to mirror and simplify from Baklava:
+
+- **Node**
+  - Identified by `nodeId: string`.
+  - Has **ports** (inputs/outputs) identified by `portId: string`.
+  - Owns **internal state** (e.g., current value for CLD variable).
+  - Exposes a pure-ish `calculate(inputs, ctx)` API returning deltas.
+
+- **Port**
+  - Input port: receives one or many numeric deltas.
+  - Output port: emits numeric deltas.
+  - Polarity is modeled at the node level (e.g., `positive` vs `negative`).
+
+- **Edge**
+  - Directed connection between source output port and target input port.
+  - Identified via `{ edgeId, fromNodeId, fromPortId, toNodeId, toPortId }`.
+
+- **Graph**
+  - Set of nodes plus set of edges.
+  - May contain **arbitrary cycles**.
+
+- **Execution Strategy**
+  - Determines node execution order for a given graph (including SCC-aware logic).
+  - Controls iteration (single-pass vs multi-pass).
+  - Determines back-edge values across iterations.
+
+## 4. Phase Breakdown (Engine-Only)
+
+Phase 1 – **Minimal Engine Skeleton**
+- Define graph data structures (`Node`, `Port`, `Edge`, `Graph`).
+- Define node execution contract.
+- Implement `IExecutionStrategy` and basic `SinglePassStrategy` with trivial order (graph insertion order, no SCC).
+- Implement `CLDEngine` core loop (single pass, no back-edge semantics required yet).
+
+Phase 2 – **Cycles and SCC-based Execution**
+- Implement Tarjan SCC detection and component DAG topological sort.
+- Integrate `modifiedTopologicalSort` into `SinglePassStrategy`.
+- Introduce **back-edge concept** in the strategy interface.
+- Implement back-edge handling with zero values for single-pass semantics.
+
+Phase 3 – **Advanced Strategies (Optional for POC)**
+- Implement `MultiPassStrategy` with fixed iteration count.
+- Implement `ConvergenceStrategy` (threshold + max iterations).
+- Optimize internal caching of SCC results and orders if needed.
+
+Phase 4 – **Baklava Adapter Integration**
+- Define adapter that:
+  - Extracts a CLD-Engine graph from Baklava editor/graph.
+  - Runs the CLD engine.
+  - Maps computed deltas/state back into Baklava nodes (e.g., CLDVariableNode).
+
+## 5. Constraints
+
+- **Implementation language**: TypeScript (ES modules).
+- **Runtime requirements**: Node + browser (no Node-exclusive APIs).
+- **Dependencies**:
+  - Keep runtime dependencies minimal or zero for core; dev deps allowed (ts, jest/vitest, etc.).
+  - No hard dependency on Baklava packages from inside the `src/` hierarchy.
+- **Testing**:
+  - Unit tests for SCC logic, execution order, and basic CLD behavior.
+  - Adapter-level tests in Baklava workspace later (see integration doc).
+

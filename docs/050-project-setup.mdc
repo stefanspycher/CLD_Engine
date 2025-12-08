@@ -1,0 +1,104 @@
+---
+description: PROJECT SETUP AND FOLDER LAYOUT FOR CLD-ENGINE
+---
+
+# 050 – Project Setup
+
+## 1. Folder Layout
+
+Target directory structure under `CLD-Engine/`:
+
+- `README.md` – brief human-readable entry point.
+- `package.json` – library metadata and scripts.
+- `tsconfig.json` – TypeScript config for src and tests.
+- `src/`
+  - `index.ts`
+  - `core/`
+    - `types.ts`
+    - `Graph.ts`
+    - `ExecutionContext.ts`
+    - `IExecutionStrategy.ts`
+    - `engine/CLDEngine.ts`
+    - `topology/modifiedTopologicalSort.ts`
+    - `strategies/SinglePassStrategy.ts`
+    - `strategies/MultiPassStrategy.ts` (later)
+    - `strategies/ConvergenceStrategy.ts` (later)
+  - `nodes/`
+    - `INodeDefinition.ts`
+    - `VariableNode.ts` (testing reference)
+- `test/` or `src/__tests__/`
+  - Unit tests for graph, topology, strategies, and engine.
+- `docs/`
+  - This documentation set.
+
+## 2. package.json Template (for Cursor)
+
+Cursor should create `package.json` similar to:
+
+```json
+{
+  "name": "cld-engine",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "dist/index.cjs",
+  "module": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lint": "eslint . --ext .ts"
+  },
+  "devDependencies": {
+    "typescript": "^5.0.0",
+    "vitest": "^1.0.0",
+    "eslint": "^9.0.0",
+    "@typescript-eslint/parser": "^7.0.0",
+    "@typescript-eslint/eslint-plugin": "^7.0.0"
+  }
+}
+```
+
+Notes:
+- Versions are approximate and can be adjusted to match the existing workspace setup.
+- If lint/test tooling is already available in the monorepo, this project can be hooked into those instead of duplicating config.
+
+## 3. tsconfig.json Template
+
+Cursor should create `tsconfig.json` similar to:
+
+```json
+{
+  "compilerOptions": {
+    "target": "ES2020",
+    "module": "ESNext",
+    "moduleResolution": "Node",
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "declaration": true,
+    "outDir": "dist",
+    "rootDir": "src"
+  },
+  "include": ["src"]
+}
+```
+
+## 4. Build and Test Strategy
+
+- Early phases:
+  - `build` may simply run `tsc` without bundling.
+  - Tests can be minimal (or even skipped) while scaffolding, then fleshed out once types and engine exist.
+- Later:
+  - Consider adding a bundler (e.g., `tsup`, `rollup`) if library distribution becomes a goal.
+
+## 5. Monorepo Considerations
+
+If CLD-Engine is consumed from the existing Baklava monorepo:
+- It can remain standalone for now (separate `pnpm` project).
+- Alternatively, it can be wired into the monorepo tooling later:
+  - Add it as a package in the monorepo `pnpm-workspace.yaml`.
+  - Use shared TypeScript/Eslint configs if available.
+
